@@ -91,7 +91,7 @@ int stcp_client_close(int sockfd)
 // 线程将终止. 根据STCP段到达时连接所处的状态, 可以采取不同的动作. 请查看客户端FSM以了解更多细节.
 void* seghandler(void* arg) 
 {
-	return;
+	return NULL;
 }
 
 
@@ -100,6 +100,6 @@ void* seghandler(void* arg)
 //当超时事件发生时, 重新发送所有已发送但未被确认段. 当发送缓冲区为空时, 这个线程将终止.
 void* sendBuf_timer(void* clienttcb) 
 {
-	return;
+	return NULL;
 }
 

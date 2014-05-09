@@ -73,6 +73,6 @@ int stcp_server_close(int sockfd)
 // 请查看服务端FSM以了解更多细节.
 void* seghandler(void* arg) 
 {
-	return;
+	return NULL;
 }
 
