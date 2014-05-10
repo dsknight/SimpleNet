@@ -133,6 +133,69 @@ int sip_recvseg(int sip_conn, seg_t* segPtr, int *src_nodeID)
                 }
             case 3 :
                 {
+                    if(ch == '#'){
+                        if (seglost(segPtr) == 1){
+                            printf("we lost a pack\n");
+                            continue;
+                        }
+                        if (checkchecksum(segPtr) == -1){
+                            printf("checksum error, abandom the pack\n");
+                            continue;
+                        }
+                        return 1;
+                    }
+                    else
+                        return -1;
+                }
+        }
+    }   
+    return -1;
+}
+
+
+//SIP进程使用这个函数接收来自STCP进程的包含段及其目的节点ID的sendseg_arg_t结构.
+//参数stcp_conn是在STCP进程和SIP进程之间连接的TCP描述符.
+//如果成功接收到sendseg_arg_t就返回1, 否则返回-1.
+int getsegToSend(int stcp_conn, int* dest_nodeID, seg_t* segPtr)
+{
+    int state = 0;
+    char ch;
+
+    while(readn(stcp_conn,&ch,1) > 0){
+        switch(state){
+            case 0 : 
+                {
+                    if(ch == '!')
+                        state = 1;
+                    break;
+                }
+            case 1 :
+                {
+                    if(ch == '&'){
+                        state = 2;
+                        if(readn(sip_conn,(void *)dest_nodeID,sizeof(int)) < 0){
+                            printf("error occurs when readn in %s\n",__func__);
+                            return -1;
+                        }
+                        if(readn(sip_conn,(void *)segPtr,sizeof(seg_t)) < 0){
+                            printf("error occurs when readn in %s\n",__func__);
+                            return -1;
+                        }
+                    }
+                    else 
+                        state = 0;
+                    break;
+                }
+            case 2 :
+                {
+                    if(ch == '!')
+                        state = 3;
+                    else
+                        return -1;
+                    break;
+                }
+            case 3 :
+                {
                     if(ch == '#')
                         return 1;
                     else
@@ -143,8 +206,25 @@ int sip_recvseg(int sip_conn, seg_t* segPtr, int *src_nodeID)
     return -1;
 }
 
+//SIP进程使用这个函数发送包含段及其源节点ID的sendseg_arg_t结构给STCP进程.
+//参数stcp_conn是STCP进程和SIP进程之间连接的TCP描述符.
+//如果sendseg_arg_t被成功发送就返回1, 否则返回-1.
+int forwardsegToSTCP(int stcp_conn, int src_nodeID, seg_t* segPtr)
+{
+    sendseg_arg_t sendSeg;
+    sendSeg.nodeID = src_nodeID;
+    sendSeg.seg = *segPtr;
+    if(send(connection,"!&",2,0) > 0)
+        if(send(connection,&sendSeg,sizeof(sendseg_arg_t),0) > 0)
+            if(send(connection,"!#",2,0) > 0)
+                return 1;
+    return -1;
+}
 
-
+// 一个段有PKT_LOST_RATE/2的可能性丢失, 或PKT_LOST_RATE/2的可能性有着错误的校验和.
+// 如果数据包丢失了, 就返回1, 否则返回0. 
+// 即使段没有丢失, 它也有PKT_LOST_RATE/2的可能性有着错误的校验和.
+// 我们在段中反转一个随机比特来创建错误的校验和.
 int seglost(seg_t* segPtr) {
     int random = rand()%100;
     if(random<PKT_LOSS_RATE*100) {
