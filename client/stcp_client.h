@@ -69,7 +69,7 @@ int stcp_client_sock(unsigned int client_port);
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //
 
-int stcp_client_connect(int socked, int nodeID, unsigned int server_port);
+int stcp_client_connect(int socked, unsigned int server_port, int nodeID);
 
 // 这个函数用于连接服务器. 它以套接字ID, 服务器节点ID和服务器的端口号作为输入参数. 套接字ID用于找到TCB条目.  
 // 这个函数设置TCB的服务器节点ID和服务器端口号,  然后使用sip_sendseg()发送一个SYN段给服务器.  

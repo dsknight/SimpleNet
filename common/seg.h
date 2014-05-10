@@ -51,23 +51,23 @@ typedef struct sendsegargument {
 //STCP进程使用这个函数发送sendseg_arg_t结构(包含段及其目的节点ID)给SIP进程.
 //参数sip_conn是在STCP进程和SIP进程之间连接的TCP描述符.
 //如果sendseg_arg_t发送成功,就返回1,否则返回-1.
-int sip_sendseg(int sip_conn, int dest_nodeID, seg_t* segPtr);
+int sip_sendseg(int sip_conn, seg_t* segPtr, int dest_nodeID);
 
 //STCP进程使用这个函数来接收来自SIP进程的包含段及其源节点ID的sendseg_arg_t结构.
 //参数sip_conn是STCP进程和SIP进程之间连接的TCP描述符.
 //当接收到段时, 使用seglost()来判断该段是否应被丢弃并检查校验和.
 //如果成功接收到sendseg_arg_t就返回1, 否则返回-1.
-int sip_recvseg(int sip_conn, int* src_nodeID, seg_t* segPtr);
+int sip_recvseg(int sip_conn, seg_t* segPtr, int *src_nodeID);
 
 //SIP进程使用这个函数接收来自STCP进程的包含段及其目的节点ID的sendseg_arg_t结构.
 //参数stcp_conn是在STCP进程和SIP进程之间连接的TCP描述符.
 //如果成功接收到sendseg_arg_t就返回1, 否则返回-1.
-int getsegToSend(int stcp_conn, int* dest_nodeID, seg_t* segPtr); 
+int getsegToSend(int stcp_conn, seg_t* segPtr, int *dest_nodeID); 
 
 //SIP进程使用这个函数发送包含段及其源节点ID的sendseg_arg_t结构给STCP进程.
 //参数stcp_conn是STCP进程和SIP进程之间连接的TCP描述符.
 //如果sendseg_arg_t被成功发送就返回1, 否则返回-1.
-int forwardsegToSTCP(int stcp_conn, int src_nodeID, seg_t* segPtr); 
+int forwardsegToSTCP(int stcp_conn,  seg_t* segPtr, int src_nodeID); 
 
 // 一个段有PKT_LOST_RATE/2的可能性丢失, 或PKT_LOST_RATE/2的可能性有着错误的校验和.
 // 如果数据包丢失了, 就返回1, 否则返回0. 
