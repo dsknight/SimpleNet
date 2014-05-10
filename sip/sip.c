@@ -200,11 +200,43 @@ void sip_stop() {
 //接收的段被封装进数据报(一个段在一个数据报中), 然后使用son_sendpkt发送该报文到下一跳. 下一跳节点ID提取自路由表.
 //当本地STCP进程断开连接时, 这个函数等待下一个STCP进程的连接.
 void waitSTCP() {
-    //你需要编写这里的代码.
-    while(1){
+    int listenfd;
+    socklen_t clilen;
+    clilen = sizeof(struct sockaddr_in);
+    struct sockaddr_in cliaddr,servaddr;
 
+    if((listenfd = socket(AF_INET,SOCK_STREAM,0)) < 0){
+        perror("Problem in creating the socket");
+        exit(2);		
     }
-    return;
+
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    servaddr.sin_port = htons(SON_PORT);
+
+    bind(listenfd,(struct sockaddr*)&servaddr,sizeof(servaddr));
+    listen(listenfd,8);
+
+    stcp_conn = accept(listenfd,(struct sockaddr*)&cliaddr, &clilen);
+    printf("STCP is connected\n");
+    seg_t seg;
+    int dest_nodeID;
+    while(1){
+        if(getsegToSend(stcp_conn,&seg,&dest_nodeID) == 1){
+            int next_nodeID = routingtable_getnextnode(routingtable,dest_nodeID);
+            sip_pkt_t pkt;
+            pkt.header.dest_nodeID = dest_nodeID;
+            pkt.header.src_nodeID = topology_getMyNodeID;
+            pkt.header.length = strlen((char*)&seg);
+            pkt.header.type = SIP;
+            memcpy(pkt.data,&seg,sizeof(seg_t));
+            son_sendpkt(next_nodeID,&pkt,son_conn);
+        }
+        else{
+            printf("get seg from stcp failed\n");
+            continue;
+        }
+    }
 }
 
 int main(int argc, char *argv[]) {

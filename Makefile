@@ -1,4 +1,4 @@
-CC 		= clang
+CC 		= gcc
 CFLAGS	= -Wall -pedantic -std=c99 -g -pthread -I./include 
 
 all: son/son sip/sip client/app_simple_client server/app_simple_server client/app_stress_client server/app_stress_server   
