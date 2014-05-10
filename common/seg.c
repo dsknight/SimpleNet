@@ -156,7 +156,7 @@ int sip_recvseg(int sip_conn, seg_t* segPtr, int *src_nodeID)
 //SIP进程使用这个函数接收来自STCP进程的包含段及其目的节点ID的sendseg_arg_t结构.
 //参数stcp_conn是在STCP进程和SIP进程之间连接的TCP描述符.
 //如果成功接收到sendseg_arg_t就返回1, 否则返回-1.
-int getsegToSend(int stcp_conn, int* dest_nodeID, seg_t* segPtr)
+int getsegToSend(int stcp_conn, seg_t* segPtr, int *dest_nodeID)
 {
     int state = 0;
     char ch;
@@ -173,11 +173,11 @@ int getsegToSend(int stcp_conn, int* dest_nodeID, seg_t* segPtr)
                 {
                     if(ch == '&'){
                         state = 2;
-                        if(readn(sip_conn,(void *)dest_nodeID,sizeof(int)) < 0){
+                        if(readn(stcp_conn,(void *)dest_nodeID,sizeof(int)) < 0){
                             printf("error occurs when readn in %s\n",__func__);
                             return -1;
                         }
-                        if(readn(sip_conn,(void *)segPtr,sizeof(seg_t)) < 0){
+                        if(readn(stcp_conn,(void *)segPtr,sizeof(seg_t)) < 0){
                             printf("error occurs when readn in %s\n",__func__);
                             return -1;
                         }
@@ -209,14 +209,14 @@ int getsegToSend(int stcp_conn, int* dest_nodeID, seg_t* segPtr)
 //SIP进程使用这个函数发送包含段及其源节点ID的sendseg_arg_t结构给STCP进程.
 //参数stcp_conn是STCP进程和SIP进程之间连接的TCP描述符.
 //如果sendseg_arg_t被成功发送就返回1, 否则返回-1.
-int forwardsegToSTCP(int stcp_conn, int src_nodeID, seg_t* segPtr)
+int forwardsegToSTCP(int stcp_conn, seg_t* segPtr, int src_nodeID)
 {
     sendseg_arg_t sendSeg;
     sendSeg.nodeID = src_nodeID;
     sendSeg.seg = *segPtr;
-    if(send(connection,"!&",2,0) > 0)
-        if(send(connection,&sendSeg,sizeof(sendseg_arg_t),0) > 0)
-            if(send(connection,"!#",2,0) > 0)
+    if(send(stcp_conn,"!&",2,0) > 0)
+        if(send(stcp_conn,&sendSeg,sizeof(sendseg_arg_t),0) > 0)
+            if(send(stcp_conn,"!#",2,0) > 0)
                 return 1;
     return -1;
 }
