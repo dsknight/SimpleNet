@@ -25,6 +25,13 @@ routingtable_t* routingtable_create()
     for (i = 0; i < MAX_ROUTINGTABLE_SLOTS; i++){
         route_table->hash[i] = NULL;
     }
+    
+    int *nbr_list = topology_getNbrArray();
+    int nbr_num = topology_getNbrNum();
+    for (i = 0; i < nbr_num; i++){
+        routingtable_setnextnode(route_table, nbr_list[i], nbr_list[i]);
+    }
+
     return route_table;
 }
 
