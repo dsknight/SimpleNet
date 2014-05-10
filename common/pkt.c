@@ -1,7 +1,35 @@
-// 文件名 pkt.c
-// 创建日期: 2013年1月
+// 文件名: common/pkt.c
+// 创建日期: 2013年
 
 #include "pkt.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <errno.h>
+#include "debug.h"
+
+static int readn( int fd, char *bp, size_t len)
+{
+    int cnt;
+    int rc;
+
+    cnt = len;
+    while ( cnt > 0 )
+    {
+        rc = recv( fd, bp, cnt, 0 );
+        if ( rc < 0 )               /* read error? */
+        {
+            if ( errno == EINTR )   /* interrupted? */
+                continue;           /* restart the read */
+            return -1;              /* return error */
+        }
+        if ( rc == 0 )              /* EOF? */
+            return len - cnt;       /* return short count */
+        bp += rc;
+        cnt -= rc;
+    }
+    return len;
+}
 
 // son_sendpkt()由SIP进程调用, 其作用是要求SON进程将报文发送到重叠网络中. SON进程和SIP进程通过一个本地TCP连接互连.
 // 在son_sendpkt()中, 报文及其下一跳的节点ID被封装进数据结构sendpkt_arg_t, 并通过TCP连接发送给SON进程. 
@@ -10,7 +38,14 @@
 // 如果发送成功, 返回1, 否则返回-1.
 int son_sendpkt(int nextNodeID, sip_pkt_t* pkt, int son_conn)
 {
-  return 0;
+    sendpkt_arg_t currSendpkt;
+    currSendpkt.nextNodeID = nextNodeID;
+    currSendpkt.pkt = *pkt;
+    if(send(son_conn,"!&",2,0) > 0)
+        if(send(son_conn,&currSendpkt,sizeof(sendpkt_arg_t),0) > 0)
+            if(send(son_conn,"!#",2,0) > 0)
+                return 1;
+    return -1;
 }
 
 // son_recvpkt()函数由SIP进程调用, 其作用是接收来自SON进程的报文. 
@@ -23,7 +58,7 @@ int son_sendpkt(int nextNodeID, sip_pkt_t* pkt, int son_conn)
 // 如果成功接收报文, 返回1, 否则返回-1.
 int son_recvpkt(sip_pkt_t* pkt, int son_conn)
 {
-  return 0;
+    return recvpkt(pkt, son_conn);
 }
 
 // 这个函数由SON进程调用, 其作用是接收数据结构sendpkt_arg_t.
@@ -38,7 +73,53 @@ int son_recvpkt(sip_pkt_t* pkt, int son_conn)
 // 如果成功接收sendpkt_arg_t结构, 返回1, 否则返回-1.
 int getpktToSend(sip_pkt_t* pkt, int* nextNode,int sip_conn)
 {
-  return 0;
+    int state = 0;
+    char ch;
+    
+    debug_printf("try to get a sendpkt from sip_conn = %d\n",sip_conn);
+    while(readn(sip_conn,&ch,1) > 0){
+        switch(state){
+            case 0 : 
+                {
+                    if(ch == '!')
+                        state = 1;
+                    break;
+                }
+            case 1 :
+                {
+                    if(ch == '&'){
+                        state = 2;
+                        if(readn(sip_conn,(void *)nextNode,sizeof(int)) < 0){
+                            printf("error occurs when readn in %s\n",__func__);
+                            return -1;
+                        }
+                        if(readn(sip_conn,(void *)pkt,sizeof(sip_pkt_t)) < 0){
+                            printf("error occurs when readn in %s\n",__func__);
+                            return -1;
+                        }
+                    }
+                    else 
+                        state = 0;
+                    break;
+                }
+            case 2 :
+                {
+                    if(ch == '!')
+                        state = 3;
+                    else
+                        return -1;
+                    break;
+                }
+            case 3 :
+                {
+                    if(ch == '#')
+                        return 1;
+                    else
+                        return -1;
+                }
+        }
+    }   
+    return -1;
 }
 
 // forwardpktToSIP()函数是在SON进程接收到来自重叠网络中其邻居的报文后被调用的. 
@@ -48,7 +129,7 @@ int getpktToSend(sip_pkt_t* pkt, int* nextNode,int sip_conn)
 // 如果报文发送成功, 返回1, 否则返回-1.
 int forwardpktToSIP(sip_pkt_t* pkt, int sip_conn)
 {
-  return 0;
+    return sendpkt(pkt, sip_conn);    
 }
 
 // sendpkt()函数由SON进程调用, 其作用是将接收自SIP进程的报文发送给下一跳.
@@ -57,7 +138,11 @@ int forwardpktToSIP(sip_pkt_t* pkt, int sip_conn)
 // 如果报文发送成功, 返回1, 否则返回-1.
 int sendpkt(sip_pkt_t* pkt, int conn)
 {
-  return 0;
+    if(send(conn,"!&",2,0) > 0)
+        if(send(conn,pkt,sizeof(sip_pkt_t),0) > 0)
+            if(send(conn,"!#",2,0) > 0)
+                return 1;
+    return -1;
 }
 
 // recvpkt()函数由SON进程调用, 其作用是接收来自重叠网络中其邻居的报文.
@@ -71,5 +156,47 @@ int sendpkt(sip_pkt_t* pkt, int conn)
 // 如果成功接收报文, 返回1, 否则返回-1.
 int recvpkt(sip_pkt_t* pkt, int conn)
 {
-  return 0;
+    int state = 0;
+    char ch;
+    
+    debug_printf("try to receive a pkt from conn = %d\n",conn);
+    while(readn(conn,&ch,1) > 0){
+        switch(state){
+            case 0 : 
+                {
+                    if(ch == '!')
+                        state = 1;
+                    break;
+                }
+            case 1 :
+                {
+                    if(ch == '&'){
+                        state = 2;
+                        if(readn(conn,(void *)pkt,sizeof(sip_pkt_t)) < 0){
+                            printf("error occurs when readn in %s\n",__func__);
+                            return -1;
+                        }
+                    }
+                    else 
+                        state = 0;
+                    break;
+                }
+            case 2 :
+                {
+                    if(ch == '!')
+                        state = 3;
+                    else
+                        return -1;
+                    break;
+                }
+            case 3 :
+                {
+                    if(ch == '#')
+                        return 1;
+                    else
+                        return -1;
+                }
+        }
+    }   
+    return -1;
 }

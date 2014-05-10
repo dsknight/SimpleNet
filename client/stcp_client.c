@@ -1,105 +1,459 @@
-//æ–‡ä»¶å: client/stcp_client.c
-//
-//æè¿°: è¿™ä¸ªæ–‡ä»¶åŒ…å«STCPå®¢æˆ·ç«¯æ¥å£å®ç° 
-//
-//åˆ›å»ºæ—¥æœŸ: 2013å¹´1æœˆ
-
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
 #include <sys/socket.h>
-#include <sys/select.h>
-#include <assert.h>
-#include <strings.h>
-#include <unistd.h>
 #include <sys/time.h>
 #include <time.h>
 #include <pthread.h>
-#include "../topology/topology.h"
+#include <string.h>
+#include <unistd.h>
+#include <time.h>
+#include <sys/time.h>
+#include <assert.h>
 #include "stcp_client.h"
-#include "../common/seg.h"
+#include "debug.h"
+#include "../topology/topology.h"
 
-//å£°æ˜tcbtableä¸ºå…¨å±€å˜é‡
-client_tcb_t* tcbtable[MAX_TRANSPORT_CONNECTIONS];
-//å£°æ˜åˆ°SIPè¿›ç¨‹çš„TCPè¿æ¥ä¸ºå…¨å±€å˜é‡
-int sip_conn;
+client_tcb_t *tcb_table[MAX_TRANSPORT_CONNECTIONS];
 
-/*********************************************************************/
+int stcp_sock;
+static pthread_t seghandler_t, segBuf_timer_tid;
+
+static inline unsigned int get_current_time(){
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    return now.tv_sec;
+}
+
+static void add_to_buffer(client_tcb_t *item, void *data, unsigned int length){
+    segBuf_t *pSegBuf = (segBuf_t *)malloc(sizeof(segBuf_t));
+    memset(pSegBuf,0,sizeof(segBuf_t));
+    pSegBuf->seg.header.src_port = item->client_portNum;
+    pSegBuf->seg.header.dest_port = item->server_portNum;
+    pSegBuf->seg.header.length = length;
+    pSegBuf->seg.header.seq_num = item->next_seqNum;
+    pSegBuf->seg.header.type = DATA;
+    memcpy(pSegBuf->seg.data,data,length); 
+    //fill next and time of this segBUf
+    pSegBuf->next = NULL;
+    //modify the TCB item,insert the segBuf to tail
+    item->next_seqNum += length;
+    pthread_mutex_lock(item->bufMutex);
+    if(item->sendBufHead == NULL){//init head,tail and start segBuf_timer()
+        usleep(SENDBUF_POLLING_INTERVAL/1000);//in case the timer have not exit
+        item->sendBufHead = pSegBuf;
+        item->sendBufTail = pSegBuf;
+        item->sendBufunSent = pSegBuf;
+        pthread_create(&segBuf_timer_tid,NULL,sendBuf_timer,(void*)item);
+    }
+    else{
+        item->sendBufTail->next = pSegBuf;
+        item->sendBufTail = pSegBuf;
+        if (item->sendBufunSent == NULL)
+            item->sendBufunSent = item->sendBufTail;
+    }
+    pthread_mutex_unlock(item->bufMutex);
+}
+
 //
-//STCP APIå®ç°
+//  ÎÒÃÇÔÚÏÂÃæÌá¹©ÁËÃ¿¸öº¯Êıµ÷ÓÃµÄÔ­ĞÍ¶¨ÒåºÍÏ¸½ÚËµÃ÷, µ«ÕâĞ©Ö»ÊÇÖ¸µ¼ĞÔµÄ, ÄãÍêÈ«¿ÉÒÔ¸ù¾İ×Ô¼ºµÄÏë·¨À´Éè¼Æ´úÂë.
 //
-/*********************************************************************/
+//  ×¢Òâ: µ±ÊµÏÖÕâĞ©º¯ÊıÊ±, ÄãĞèÒª¿¼ÂÇFSMÖĞËùÓĞ¿ÉÄÜµÄ×´Ì¬, Õâ¿ÉÒÔÊ¹ÓÃswitchÓï¾äÀ´ÊµÏÖ.
+//
+//  Ä¿±ê: ÄãµÄÈÎÎñ¾ÍÊÇÉè¼Æ²¢ÊµÏÖÏÂÃæµÄº¯ÊıÔ­ĞÍ.
+//
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-// è¿™ä¸ªå‡½æ•°åˆå§‹åŒ–TCBè¡¨, å°†æ‰€æœ‰æ¡ç›®æ ‡è®°ä¸ºNULL.  
-// å®ƒè¿˜é’ˆå¯¹TCPå¥—æ¥å­—æè¿°ç¬¦connåˆå§‹åŒ–ä¸€ä¸ªSTCPå±‚çš„å…¨å±€å˜é‡, è¯¥å˜é‡ä½œä¸ºsip_sendsegå’Œsip_recvsegçš„è¾“å…¥å‚æ•°.
-// æœ€å, è¿™ä¸ªå‡½æ•°å¯åŠ¨seghandlerçº¿ç¨‹æ¥å¤„ç†è¿›å…¥çš„STCPæ®µ. å®¢æˆ·ç«¯åªæœ‰ä¸€ä¸ªseghandler.
-void stcp_client_init(int conn) 
-{
+// Õâ¸öº¯Êı³õÊ¼»¯TCB±í, ½«ËùÓĞÌõÄ¿±ê¼ÇÎªNULL.  
+// Ëü»¹Õë¶ÔÖØµşÍøÂçTCPÌ×½Ó×ÖÃèÊö·ûconn³õÊ¼»¯Ò»¸öSTCP²ãµÄÈ«¾Ö±äÁ¿, ¸Ã±äÁ¿×÷Îªsip_sendsegºÍsip_recvsegµÄÊäÈë²ÎÊı.
+// ×îºó, Õâ¸öº¯ÊıÆô¶¯seghandlerÏß³ÌÀ´´¦Àí½øÈëµÄSTCP¶Î. ¿Í»§¶ËÖ»ÓĞÒ»¸öseghandler.
+//
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//
+
+void stcp_client_init(int conn) {
+    for (int i = 0; i < MAX_TRANSPORT_CONNECTIONS; i++){
+        tcb_table[i] = NULL;
+    }
+    stcp_sock = conn;
+    pthread_create(&seghandler_t, NULL, seghandler, NULL);
     return;
 }
 
-// è¿™ä¸ªå‡½æ•°æŸ¥æ‰¾å®¢æˆ·ç«¯TCBè¡¨ä»¥æ‰¾åˆ°ç¬¬ä¸€ä¸ªNULLæ¡ç›®, ç„¶åä½¿ç”¨malloc()ä¸ºè¯¥æ¡ç›®åˆ›å»ºä¸€ä¸ªæ–°çš„TCBæ¡ç›®.
-// è¯¥TCBä¸­çš„æ‰€æœ‰å­—æ®µéƒ½è¢«åˆå§‹åŒ–. ä¾‹å¦‚, TCB stateè¢«è®¾ç½®ä¸ºCLOSEDï¼Œå®¢æˆ·ç«¯ç«¯å£è¢«è®¾ç½®ä¸ºå‡½æ•°è°ƒç”¨å‚æ•°client_port. 
-// TCBè¡¨ä¸­æ¡ç›®çš„ç´¢å¼•å·åº”ä½œä¸ºå®¢æˆ·ç«¯çš„æ–°å¥—æ¥å­—IDè¢«è¿™ä¸ªå‡½æ•°è¿”å›, å®ƒç”¨äºæ ‡è¯†å®¢æˆ·ç«¯çš„è¿æ¥. 
-// å¦‚æœTCBè¡¨ä¸­æ²¡æœ‰æ¡ç›®å¯ç”¨, è¿™ä¸ªå‡½æ•°è¿”å›-1.
-int stcp_client_sock(unsigned int client_port) 
-{
-	return 0;
+
+// Õâ¸öº¯Êı²éÕÒ¿Í»§¶ËTCB±íÒÔÕÒµ½µÚÒ»¸öNULLÌõÄ¿, È»ºóÊ¹ÓÃmalloc()Îª¸ÃÌõÄ¿´´½¨Ò»¸öĞÂµÄTCBÌõÄ¿.
+// ¸ÃTCBÖĞµÄËùÓĞ×Ö¶Î¶¼±»³õÊ¼»¯. ÀıÈç, TCB state±»ÉèÖÃÎªCLOSED£¬¿Í»§¶Ë¶Ë¿Ú±»ÉèÖÃÎªº¯Êıµ÷ÓÃ²ÎÊıclient_port. 
+// TCB±íÖĞÌõÄ¿µÄË÷ÒıºÅÓ¦×÷Îª¿Í»§¶ËµÄĞÂÌ×½Ó×ÖID±»Õâ¸öº¯Êı·µ»Ø, ËüÓÃÓÚ±êÊ¶¿Í»§¶ËµÄÁ¬½Ó. 
+// Èç¹ûTCB±íÖĞÃ»ÓĞÌõÄ¿¿ÉÓÃ, Õâ¸öº¯Êı·µ»Ø-1.
+//
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//
+int stcp_client_sock(unsigned int client_port) {
+    for (int i = 0; i < MAX_TRANSPORT_CONNECTIONS; i++){
+        if (tcb_table[i] == NULL){
+            tcb_table[i] = (client_tcb_t *)malloc(sizeof(client_tcb_t));
+            client_tcb_t *item = tcb_table[i];
+            // init tcb item value
+            item->state = CLOSED;
+            item->client_portNum = client_port;
+            item->client_nodeID = topology_getMyNodeID();
+            item->next_seqNum = 0;//data seq start from 0
+            item->bufMutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+            pthread_mutex_init(item->bufMutex, NULL);
+            item->sendBufHead = NULL;
+            item->sendBufunSent = NULL;
+            item->unAck_segNum = 0;
+            return i;
+        }
+    }
+    return -1;
 }
 
-// è¿™ä¸ªå‡½æ•°ç”¨äºè¿æ¥æœåŠ¡å™¨. å®ƒä»¥å¥—æ¥å­—ID, æœåŠ¡å™¨èŠ‚ç‚¹IDå’ŒæœåŠ¡å™¨çš„ç«¯å£å·ä½œä¸ºè¾“å…¥å‚æ•°. å¥—æ¥å­—IDç”¨äºæ‰¾åˆ°TCBæ¡ç›®.  
-// è¿™ä¸ªå‡½æ•°è®¾ç½®TCBçš„æœåŠ¡å™¨èŠ‚ç‚¹IDå’ŒæœåŠ¡å™¨ç«¯å£å·,  ç„¶åä½¿ç”¨sip_sendseg()å‘é€ä¸€ä¸ªSYNæ®µç»™æœåŠ¡å™¨.  
-// åœ¨å‘é€äº†SYNæ®µä¹‹å, ä¸€ä¸ªå®šæ—¶å™¨è¢«å¯åŠ¨. å¦‚æœåœ¨SYNSEG_TIMEOUTæ—¶é—´ä¹‹å†…æ²¡æœ‰æ”¶åˆ°SYNACK, SYN æ®µå°†è¢«é‡ä¼ . 
-// å¦‚æœæ”¶åˆ°äº†, å°±è¿”å›1. å¦åˆ™, å¦‚æœé‡ä¼ SYNçš„æ¬¡æ•°å¤§äºSYN_MAX_RETRY, å°±å°†stateè½¬æ¢åˆ°CLOSED, å¹¶è¿”å›-1.
-int stcp_client_connect(int sockfd, int nodeID, unsigned int server_port) 
-{
-	return 0;
+
+// Õâ¸öº¯ÊıÓÃÓÚÁ¬½Ó·şÎñÆ÷. ËüÒÔÌ×½Ó×ÖIDºÍ·şÎñÆ÷µÄ¶Ë¿ÚºÅ×÷ÎªÊäÈë²ÎÊı. Ì×½Ó×ÖIDÓÃÓÚÕÒµ½TCBÌõÄ¿.  
+// Õâ¸öº¯ÊıÉèÖÃTCBµÄ·şÎñÆ÷¶Ë¿ÚºÅ,  È»ºóÊ¹ÓÃsip_sendseg()·¢ËÍÒ»¸öSYN¶Î¸ø·şÎñÆ÷.  
+// ÔÚ·¢ËÍÁËSYN¶ÎÖ®ºó, Ò»¸ö¶¨Ê±Æ÷±»Æô¶¯. Èç¹ûÔÚSYNSEG_TIMEOUTÊ±¼äÖ®ÄÚÃ»ÓĞÊÕµ½SYNACK, SYN ¶Î½«±»ÖØ´«. 
+// Èç¹ûÊÕµ½ÁË, ¾Í·µ»Ø1. ·ñÔò, Èç¹ûÖØ´«SYNµÄ´ÎÊı´óÓÚSYN_MAX_RETRY, ¾Í½«state×ª»»µ½CLOSED, ²¢·µ»Ø-1.
+//
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//
+int stcp_client_connect(int sockfd, unsigned int server_port, int nodeID) {
+    client_tcb_t *item = tcb_table[sockfd];
+    if (item == NULL){
+        printf("in %s : sockfd invalid!\n", __func__);
+        return -1;
+    }
+    item->server_portNum = server_port;
+    item->server_nodeID = nodeID;
+    seg_t syn_seg;
+    memset(&syn_seg, 0, sizeof(syn_seg));
+    syn_seg.header.type = SYN;
+    syn_seg.header.src_port = item->client_portNum;
+    syn_seg.header.dest_port = item->server_portNum;
+    syn_seg.header.seq_num = sockfd;
+
+    switch(item->state){
+        case CLOSED:
+            {
+                item->state = SYNSENT;
+                int try_times = 0;
+                sip_sendseg(stcp_sock, &syn_seg, nodeID);
+                printf("send syn\n");
+                sleep(1);
+                while(item->state != CONNECTED && try_times <= SYN_MAX_RETRY){
+                    try_times++;
+                    debug_printf("send a pack with port %d\n", syn_seg.header.dest_port);
+                    sip_sendseg(stcp_sock, &syn_seg, nodeID);
+                    printf("timeout, send syn again\n");
+                    sleep(1);
+                }
+                if (item->state == CONNECTED){
+                    printf("now stcp connected\n");
+                    return 1;
+                } else {
+                    item->state = CLOSED;
+                    printf("stcp connect error\n");
+                    return -1;
+                }
+                break;
+            }
+        case SYNSENT:
+            {
+                printf("error occur: call connect when in synsent state\n");
+                return -1;
+                break;
+            }
+        case CONNECTED:
+            {
+                printf("error occur: has connected\n");
+                return -1;
+                break;
+            }
+        case FINWAIT:
+            {
+                printf("error occur: call connect when in finwait state\n");
+                return -1;
+                break;
+            }
+    }
+
+    return -1;
+
 }
 
-// å‘é€æ•°æ®ç»™STCPæœåŠ¡å™¨. è¿™ä¸ªå‡½æ•°ä½¿ç”¨å¥—æ¥å­—IDæ‰¾åˆ°TCBè¡¨ä¸­çš„æ¡ç›®.
-// ç„¶åå®ƒä½¿ç”¨æä¾›çš„æ•°æ®åˆ›å»ºsegBuf, å°†å®ƒé™„åŠ åˆ°å‘é€ç¼“å†²åŒºé“¾è¡¨ä¸­.
-// å¦‚æœå‘é€ç¼“å†²åŒºåœ¨æ’å…¥æ•°æ®ä¹‹å‰ä¸ºç©º, ä¸€ä¸ªåä¸ºsendbuf_timerçš„çº¿ç¨‹å°±ä¼šå¯åŠ¨.
-// æ¯éš”SENDBUF_ROLLING_INTERVALæ—¶é—´æŸ¥è¯¢å‘é€ç¼“å†²åŒºä»¥æ£€æŸ¥æ˜¯å¦æœ‰è¶…æ—¶äº‹ä»¶å‘ç”Ÿ. 
-// è¿™ä¸ªå‡½æ•°åœ¨æˆåŠŸæ—¶è¿”å›1ï¼Œå¦åˆ™è¿”å›-1. 
-// stcp_client_sendæ˜¯ä¸€ä¸ªéé˜»å¡å‡½æ•°è°ƒç”¨.
-// å› ä¸ºç”¨æˆ·æ•°æ®è¢«åˆ†ç‰‡ä¸ºå›ºå®šå¤§å°çš„STCPæ®µ, æ‰€ä»¥ä¸€æ¬¡stcp_client_sendè°ƒç”¨å¯èƒ½ä¼šäº§ç”Ÿå¤šä¸ªsegBuf
-// è¢«æ·»åŠ åˆ°å‘é€ç¼“å†²åŒºé“¾è¡¨ä¸­. å¦‚æœè°ƒç”¨æˆåŠŸ, æ•°æ®å°±è¢«æ”¾å…¥TCBå‘é€ç¼“å†²åŒºé“¾è¡¨ä¸­, æ ¹æ®æ»‘åŠ¨çª—å£çš„æƒ…å†µ,
-// æ•°æ®å¯èƒ½è¢«ä¼ è¾“åˆ°ç½‘ç»œä¸­, æˆ–åœ¨é˜Ÿåˆ—ä¸­ç­‰å¾…ä¼ è¾“.
-int stcp_client_send(int sockfd, void* data, unsigned int length) 
+
+// ·¢ËÍÊı¾İ¸øSTCP·şÎñÆ÷. Õâ¸öº¯ÊıÊ¹ÓÃÌ×½Ó×ÖIDÕÒµ½TCB±íÖĞµÄÌõÄ¿. 
+// È»ºóËüÊ¹ÓÃÌá¹©µÄÊı¾İ´´½¨segBuf, ½«Ëü¸½¼Óµ½·¢ËÍ»º³åÇøÁ´±íÖĞ. 
+// Èç¹û·¢ËÍ»º³åÇøÔÚ²åÈëÊı¾İÖ®Ç°Îª¿Õ, Ò»¸öÃûÎªsendbuf_timerµÄÏß³Ì¾Í»áÆô¶¯. 
+// Ã¿¸ôSENDBUF_POLLING_INTERVALÊ±¼ä²éÑ¯·¢ËÍ»º³åÇøÒÔ¼ì²éÊÇ·ñÓĞ³¬Ê±ÊÂ¼ş·¢Éú.
+// Õâ¸öº¯ÊıÔÚ³É¹¦Ê±·µ»Ø1£¬·ñÔò·µ»Ø-1. 
+//
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//
+int stcp_client_send(int sockfd, void* data, unsigned int length)
 {
+    client_tcb_t *item = tcb_table[sockfd];
+    if (item == NULL){
+        printf("invalid sockfd:%d\n", sockfd);
+        return -1;
+    }
+    if(item->state != CONNECTED){
+        printf("can not send data,because the TCB state = %d\n",item->state);
+        return -1;
+    }
+
+    if (length <= MAX_SEG_LEN)
+        add_to_buffer(item, data, length);
+    else {
+        while(length > MAX_SEG_LEN){
+            add_to_buffer(item, data, MAX_SEG_LEN);
+            length -= MAX_SEG_LEN;
+            data += MAX_SEG_LEN;
+        }
+        if (length > 0)
+            add_to_buffer(item, data, length);
+    }
+
+    //send the segment
+    pthread_mutex_lock(item->bufMutex);
+    while(item->unAck_segNum < GBN_WINDOW && item->sendBufunSent != NULL){
+        item->sendBufunSent->sentTime = get_current_time();
+        sip_sendseg(stcp_sock, &item->sendBufunSent->seg, tcb_table[sockfd]->server_nodeID);
+        item->unAck_segNum++;
+        item->sendBufunSent = item->sendBufunSent->next;
+    }
+    pthread_mutex_unlock(item->bufMutex);
+
+    return 1;
+}
+
+// Õâ¸öº¯ÊıÓÃÓÚ¶Ï¿ªµ½·şÎñÆ÷µÄÁ¬½Ó. ËüÒÔÌ×½Ó×ÖID×÷ÎªÊäÈë²ÎÊı. Ì×½Ó×ÖIDÓÃÓÚÕÒµ½TCB±íÖĞµÄÌõÄ¿.  
+// Õâ¸öº¯Êı·¢ËÍFIN¶Î¸ø·şÎñÆ÷. ÔÚ·¢ËÍFINÖ®ºó, state½«×ª»»µ½FINWAIT, ²¢Æô¶¯Ò»¸ö¶¨Ê±Æ÷.
+// Èç¹ûÔÚ×îÖÕ³¬Ê±Ö®Ç°state×ª»»µ½CLOSED, Ôò±íÃ÷FINACKÒÑ±»³É¹¦½ÓÊÕ. ·ñÔò, Èç¹ûÔÚ¾­¹ıFIN_MAX_RETRY´Î³¢ÊÔÖ®ºó,
+// stateÈÔÈ»ÎªFINWAIT, state½«×ª»»µ½CLOSED, ²¢·µ»Ø-1.
+//
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//
+int stcp_client_disconnect(int sockfd) {
+    client_tcb_t *item = tcb_table[sockfd];
+    if (item == NULL){
+        printf("in %s : sockfd invalid!\n", __func__);
+        return -1;
+    }
+    seg_t fin_seg;
+    memset(&fin_seg, 0, sizeof(fin_seg));
+    fin_seg.header.type = FIN;
+    fin_seg.header.src_port = item->client_portNum;
+    fin_seg.header.dest_port = item->server_portNum;
+    fin_seg.header.seq_num = sockfd;
+    
+    switch(item->state){
+        case CLOSED:
+            {
+                printf("error occur: call disconnect when in closed state\n");
+                return -1;
+                break;
+            }
+        case SYNSENT:
+            {
+                printf("error occur: call disconnect when in synsent state\n");
+                return -1;
+                break;
+            }
+        case CONNECTED:
+            {
+                item->state = FINWAIT;
+                int try_times = 0;
+                sip_sendseg(stcp_sock, &fin_seg, tcb_table[sockfd]->server_nodeID);
+                printf("send fin\n");
+                sleep(1);
+                while(item->state != CLOSED && try_times < FIN_MAX_RETRY){
+                    try_times++;
+                    sip_sendseg(stcp_sock, &fin_seg, tcb_table[sockfd]->server_nodeID);
+                    printf("timeout, send fin again\n");
+                    sleep(1);
+                }
+
+                if (item->state == CLOSED){
+                    printf("now stcp closed\n");
+                    return 1;
+                } else {
+                    printf("timeout, finally close connect\n");
+                    item->state = CLOSED;
+                    return -1;
+                }
+            }
+        case FINWAIT:
+            {
+                printf("error occur: call disconnect when in finwait state\n");
+                return -1;
+                break;
+            }
+    }
+
+
     return 0;
 }
 
-// è¿™ä¸ªå‡½æ•°ç”¨äºæ–­å¼€åˆ°æœåŠ¡å™¨çš„è¿æ¥. å®ƒä»¥å¥—æ¥å­—IDä½œä¸ºè¾“å…¥å‚æ•°. å¥—æ¥å­—IDç”¨äºæ‰¾åˆ°TCBè¡¨ä¸­çš„æ¡ç›®.  
-// è¿™ä¸ªå‡½æ•°å‘é€FINæ®µç»™æœåŠ¡å™¨. åœ¨å‘é€FINä¹‹å, stateå°†è½¬æ¢åˆ°FINWAIT, å¹¶å¯åŠ¨ä¸€ä¸ªå®šæ—¶å™¨.
-// å¦‚æœåœ¨æœ€ç»ˆè¶…æ—¶ä¹‹å‰stateè½¬æ¢åˆ°CLOSED, åˆ™è¡¨æ˜FINACKå·²è¢«æˆåŠŸæ¥æ”¶. å¦åˆ™, å¦‚æœåœ¨ç»è¿‡FIN_MAX_RETRYæ¬¡å°è¯•ä¹‹å,
-// stateä»ç„¶ä¸ºFINWAIT, stateå°†è½¬æ¢åˆ°CLOSED, å¹¶è¿”å›-1.
-int stcp_client_disconnect(int sockfd) 
-{
-	return 0;
-}
 
-// è¿™ä¸ªå‡½æ•°è°ƒç”¨free()é‡Šæ”¾TCBæ¡ç›®. å®ƒå°†è¯¥æ¡ç›®æ ‡è®°ä¸ºNULL, æˆåŠŸæ—¶(å³ä½äºæ­£ç¡®çš„çŠ¶æ€)è¿”å›1,
-// å¤±è´¥æ—¶(å³ä½äºé”™è¯¯çš„çŠ¶æ€)è¿”å›-1.
-int stcp_client_close(int sockfd) 
-{
-	return 0;
-}
+// Õâ¸öº¯Êıµ÷ÓÃfree()ÊÍ·ÅTCBÌõÄ¿. Ëü½«¸ÃÌõÄ¿±ê¼ÇÎªNULL, ³É¹¦Ê±(¼´Î»ÓÚÕıÈ·µÄ×´Ì¬)·µ»Ø1,
+// Ê§°ÜÊ±(¼´Î»ÓÚ´íÎóµÄ×´Ì¬)·µ»Ø-1.
+//
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//
 
-// è¿™æ˜¯ç”±stcp_client_init()å¯åŠ¨çš„çº¿ç¨‹. å®ƒå¤„ç†æ‰€æœ‰æ¥è‡ªæœåŠ¡å™¨çš„è¿›å…¥æ®µ. 
-// seghandlerè¢«è®¾è®¡ä¸ºä¸€ä¸ªè°ƒç”¨sip_recvseg()çš„æ— ç©·å¾ªç¯. å¦‚æœsip_recvseg()å¤±è´¥, åˆ™è¯´æ˜åˆ°SIPè¿›ç¨‹çš„è¿æ¥å·²å…³é—­,
-// çº¿ç¨‹å°†ç»ˆæ­¢. æ ¹æ®STCPæ®µåˆ°è¾¾æ—¶è¿æ¥æ‰€å¤„çš„çŠ¶æ€, å¯ä»¥é‡‡å–ä¸åŒçš„åŠ¨ä½œ. è¯·æŸ¥çœ‹å®¢æˆ·ç«¯FSMä»¥äº†è§£æ›´å¤šç»†èŠ‚.
-void* seghandler(void* arg) 
-{
-	return NULL;
+int stcp_client_close(int sockfd) {
+    client_tcb_t *item = tcb_table[sockfd];
+    if (item == NULL){
+        printf("no such item! sockfd: %d\n", sockfd);
+        return -1;
+    } else {
+        printf("free tcb item %d memory successfully\n", sockfd);
+        free(item->bufMutex);
+        free(item);
+        tcb_table[sockfd] = NULL;
+        return 1;
+    }
 }
 
 
-//è¿™ä¸ªçº¿ç¨‹æŒç»­è½®è¯¢å‘é€ç¼“å†²åŒºä»¥è§¦å‘è¶…æ—¶äº‹ä»¶. å¦‚æœå‘é€ç¼“å†²åŒºéç©º, å®ƒåº”ä¸€ç›´è¿è¡Œ.
-//å¦‚æœ(å½“å‰æ—¶é—´ - ç¬¬ä¸€ä¸ªå·²å‘é€ä½†æœªè¢«ç¡®è®¤æ®µçš„å‘é€æ—¶é—´) > DATA_TIMEOUT, å°±å‘ç”Ÿä¸€æ¬¡è¶…æ—¶äº‹ä»¶.
-//å½“è¶…æ—¶äº‹ä»¶å‘ç”Ÿæ—¶, é‡æ–°å‘é€æ‰€æœ‰å·²å‘é€ä½†æœªè¢«ç¡®è®¤æ®µ. å½“å‘é€ç¼“å†²åŒºä¸ºç©ºæ—¶, è¿™ä¸ªçº¿ç¨‹å°†ç»ˆæ­¢.
-void* sendBuf_timer(void* clienttcb) 
+// ÕâÊÇÓÉstcp_client_init()Æô¶¯µÄÏß³Ì. Ëü´¦ÀíËùÓĞÀ´×Ô·şÎñÆ÷µÄ½øÈë¶Î. 
+// seghandler±»Éè¼ÆÎªÒ»¸öµ÷ÓÃsip_recvseg()µÄÎŞÇîÑ­»·. Èç¹ûsip_recvseg()Ê§°Ü, ÔòËµÃ÷ÖØµşÍøÂçÁ¬½ÓÒÑ¹Ø±Õ,
+// Ïß³Ì½«ÖÕÖ¹. ¸ù¾İSTCP¶Îµ½´ïÊ±Á¬½ÓËù´¦µÄ×´Ì¬, ¿ÉÒÔ²ÉÈ¡²»Í¬µÄ¶¯×÷. Çë²é¿´¿Í»§¶ËFSMÒÔÁË½â¸ü¶àÏ¸½Ú.
+//
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//
+
+void *seghandler(void* arg) {
+    seg_t recv_seg;
+    int *server_nodeID = (int *)malloc(sizeof(int));
+    while(sip_recvseg(stcp_sock, &recv_seg, server_nodeID) > 0){
+        client_tcb_t *item = NULL;
+        for(int i = 0; i < MAX_TRANSPORT_CONNECTIONS; i++){
+            if (tcb_table[i] != NULL && tcb_table[i]->client_portNum == recv_seg.header.dest_port){
+                item = tcb_table[i];
+                break;
+            }
+        }
+        if (item == NULL){
+            printf("receive a pack without corresponding socket\n");
+            continue;
+        }
+
+        switch(item->state){
+            case CLOSED:
+                {
+                    printf("a closed socket receive a pack\n");
+                    break;
+                }
+            case SYNSENT:
+                {
+                    if (recv_seg.header.type == SYNACK){
+                        printf("receive synack, turn to connected state\n");
+                        item->state = CONNECTED;
+                    } else {
+                        printf("receice an useless pack when in synsent state\n");
+                    }
+                    break;
+                }
+            case CONNECTED:
+                {
+                    debug_printf("get a pack in connected state,type is %d\n",recv_seg.header.type);
+                    if(recv_seg.header.type == DATAACK){
+                        segBuf_t *pSegBuf = item->sendBufHead;
+                        //delete the segBuf whose seq_num < ack_num
+                        pthread_mutex_lock(item->bufMutex);
+                        int seqNum = pSegBuf->seg.header.seq_num;
+                        while(seqNum < recv_seg.header.ack_num){
+                            if(item->sendBufHead == item->sendBufTail){//only one segBuf
+                                free(pSegBuf);
+                                pSegBuf = item->sendBufHead = item->sendBufTail = NULL;
+                                item->unAck_segNum = 0;
+                                break;
+                            }
+                            else{
+                                item->sendBufHead = item->sendBufHead->next;
+                                free(pSegBuf);
+                                pSegBuf = item->sendBufHead;
+                                item->unAck_segNum --;
+                            }
+                            seqNum = pSegBuf->seg.header.seq_num;
+                        }
+                        pthread_mutex_unlock(item->bufMutex);
+                        //send the unsent segBuf
+                        pthread_mutex_lock(item->bufMutex);
+                        while(item->sendBufunSent != NULL && item->unAck_segNum < GBN_WINDOW){
+                            pSegBuf = item->sendBufunSent;
+                            if(pSegBuf == NULL){
+                                pthread_mutex_unlock(item->bufMutex);
+                                break;
+                            }
+                            pSegBuf->sentTime = get_current_time();
+                            sip_sendseg(stcp_sock,&pSegBuf->seg,*server_nodeID);
+                            printf("in : %s, seq_num : %d has been sent\n", __func__,pSegBuf->seg.header.seq_num);
+                            item->sendBufunSent = item->sendBufunSent->next;
+                            item->unAck_segNum++;
+                        }
+                        pthread_mutex_unlock(item->bufMutex);
+                    }
+                    break;
+                }
+            case FINWAIT:
+                {
+                    if (recv_seg.header.type == FINACK){
+                        printf("receive finack, turn to closed state\n");
+                        item->state = CLOSED;
+                    } else {
+                        printf("receive an useless pack when in synsent state\n");
+                    }
+                    break;
+                }
+        }
+    }
+    return 0;
+}
+
+// Õâ¸öÏß³Ì³ÖĞøÂÖÑ¯·¢ËÍ»º³åÇøÒÔ´¥·¢³¬Ê±ÊÂ¼ş. Èç¹û·¢ËÍ»º³åÇø·Ç¿Õ, ËüÓ¦Ò»Ö±ÔËĞĞ.
+// Èç¹û(µ±Ç°Ê±¼ä - µÚÒ»¸öÒÑ·¢ËÍµ«Î´±»È·ÈÏ¶ÎµÄ·¢ËÍÊ±¼ä) > DATA_TIMEOUT, ¾Í·¢ÉúÒ»´Î³¬Ê±ÊÂ¼ş.
+// µ±³¬Ê±ÊÂ¼ş·¢ÉúÊ±, ÖØĞÂ·¢ËÍËùÓĞÒÑ·¢ËÍµ«Î´±»È·ÈÏ¶Î. µ±·¢ËÍ»º³åÇøÎª¿ÕÊ±, Õâ¸öÏß³Ì½«ÖÕÖ¹.
+//
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//
+void* sendBuf_timer(void* clienttcb)
 {
-	return NULL;
+    client_tcb_t * currTcb = (client_tcb_t *)clienttcb;
+    int sockfd = 0;
+    for(;sockfd < MAX_TRANSPORT_CONNECTIONS; sockfd++){
+        if(tcb_table[sockfd] != NULL && tcb_table[sockfd] == currTcb)
+            break;
+    }
+    if(sockfd >= MAX_TRANSPORT_CONNECTIONS){
+        printf("in:%s,Error! Can not find the TCB\n",__func__);
+        return NULL;
+    }
+    while(1){
+        segBuf_t *pSegBuf = currTcb->sendBufHead;
+        if(pSegBuf == NULL){
+            printf("segBuf now is empty,timer terminated\n");
+            return NULL;
+        }
+        if(currTcb->state != CONNECTED){
+            printf("in : %s, timer terminated because currTcb->state = %d\n",__func__,currTcb->state);
+            return NULL;
+        }
+        int now = get_current_time();
+        pthread_mutex_lock(currTcb->bufMutex);
+        if(now - pSegBuf->sentTime > 1){//time out
+            for(int i = 0; i < currTcb->unAck_segNum; i++){
+                assert(pSegBuf != NULL);
+                pSegBuf->sentTime = get_current_time();
+                sip_sendseg(stcp_sock,&pSegBuf->seg, currTcb->server_nodeID);
+                printf("in : %s, seq_num : %d has been resent\n",__func__,pSegBuf->seg.header.seq_num);
+                pSegBuf = pSegBuf->next;
+            }
+        }
+        pthread_mutex_unlock(currTcb->bufMutex);
+        usleep(SENDBUF_POLLING_INTERVAL/1000);
+    }
+    return NULL;
 }
 
