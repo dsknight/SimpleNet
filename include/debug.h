@@ -27,6 +27,6 @@
 
 #define debug_printf(fmt, ...) \
     do { if (DEBUG_TEST) printf("info in file:%s line:%d func:%s() ==> \n" fmt, \
-            __FILE__, __LINE__, __func__, ##__VA_ARGS__); } while (0)
+            __FILE__, __LINE__, __func__, __VA_ARGS__); } while (0)
 
 #endif

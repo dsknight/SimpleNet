@@ -142,7 +142,7 @@ void* pkthandler(void* arg) {
                 case SIP:
                     {
                         if (pkt.header.dest_nodeID == topology_getMyNodeID()){
-                            forwardsegToSTCP(stcp_conn, pkt.header.src_nodeID, (seg_t *)pkt.data); 
+                            forwardsegToSTCP(stcp_conn, (seg_t *)pkt.data ,pkt.header.src_nodeID); 
                         } else {
                             int nextnode = routingtable_getnextnode(routingtable, pkt.header.dest_nodeID);
                             if (nextnode == -1){
@@ -159,7 +159,7 @@ void* pkthandler(void* arg) {
                         int node_num = topology_getNodeNum();
                         int i,j;
                         pthread_mutex_lock(dv_mutex);
-                        for (i = 0; i < nbr_num; i++){
+                        for (i = 0; i <= nbr_num; i++){
                             if (dv[i].nodeID == pkt.header.src_nodeID){
                                 pkt_routeupdate_t *route_pkt = (pkt_routeupdate_t *)pkt.data;
                                 for (j = 0; j < node_num; j++){
@@ -169,7 +169,10 @@ void* pkthandler(void* arg) {
                             }
                         }
                         pthread_mutex_unlock(dv_mutex);
+
                         update_routingtable();
+                        dvtable_print(dv);
+                        routingtable_print(routingtable);
                         break;
                     }
                 default:

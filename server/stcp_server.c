@@ -140,7 +140,6 @@ int stcp_server_close(int sockfd) {
 //
 
 void *seghandler(void* arg) {
-    debug_printf("handler begin\n");
     pthread_detach(pthread_self());
     int conn = (int)arg;
     seg_t * pSeg = (seg_t *)malloc(sizeof(seg_t));
