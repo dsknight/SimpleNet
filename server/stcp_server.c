@@ -99,6 +99,12 @@ int stcp_server_sock(unsigned int server_port) {
     tcbTable[sockfd]->usedBufLen = 0;
     tcbTable[sockfd]->expect_seqNum = 0;
     tcbTable[sockfd]->recvBufMutex = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t));
+    tcbTable[sockfd]->next_seqNum = 0;
+    tcbTable[sockfd]->sendBufHead = NULL;
+    tcbTable[sockfd]->sendBufunSent = NULL;
+    tcbTable[sockfd]->sendBufTail = NULL;
+    tcbTable[sockfd]->unAck_segNum = 0;
+    tcbTable[sockfd]->sendBufMutex = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t));
     pthread_mutex_init(tcbTable[sockfd]->recvBufMutex, NULL);
     pthread_mutex_init(tcbTable[sockfd]->sendBufMutex, NULL);
     return sockfd;
@@ -113,12 +119,24 @@ int stcp_server_sock(unsigned int server_port) {
 
 int stcp_server_accept(int sockfd) {
     server_tcb_t *currTcb = tcbTable[sockfd];
-    currTcb->state = LISTENING;
-    debug_printf("server %d now ready to accept\n", sockfd);
-    while(currTcb->state != CONNECTED)
-        sleep(1);
-
-    return 1;
+    if(currTcb == NULL){
+        printf("int %s, wrong sockfd = %d\n",sockfd);
+        return -1;
+    }
+    if(currTcb->state == CLOSED){
+        currTcb->state = LISTENING;
+        debug_printf("server %d now ready to accept\n", sockfd);
+        while(currTcb->state != CONNECTED)
+            sleep(1);
+        return sockfd;
+    }
+    else{
+        int retfd = stcp_server_sock(currTcb->server_portNum);
+        tcbTable[retfd]->state = LISTENING;
+        while(tcbTable[retfd]->state != CONNECTED)
+            sleep(1);
+        return retfd;
+    }
 }
 
 int stcp_server_send(int sockfd, void* data, unsigned int length)
@@ -144,7 +162,6 @@ int stcp_server_send(int sockfd, void* data, unsigned int length)
         if (length > 0)
             add_to_buffer(item, data, length);
     }
-
     //send the segment
     pthread_mutex_lock(item->sendBufMutex);
     while(item->unAck_segNum < GBN_WINDOW && item->sendBufunSent != NULL){
@@ -217,7 +234,7 @@ void *seghandler(void* arg) {
     int *client_nodeID = (int *)malloc(sizeof(int));
     while(sip_recvseg(stcp_sock,pSeg,client_nodeID)){
         debug_printf("get a pack, to deal with it, it's type is %d\n", pSeg->header.type);
-        server_tcb_t *pTcb = find_tcb(pSeg->header.dest_port);
+        server_tcb_t *pTcb = find_tcb(pSeg->header.src_port, pSeg->header.dest_port, *client_nodeID);
         if(pTcb == NULL){
             printf("wrong port %d\n",pSeg->header.dest_port);
             break;
@@ -290,6 +307,7 @@ void *seghandler(void* arg) {
                 default:break;	            
             }
         }
+
         else if(pSeg->header.type == DATA){
             switch(pTcb->state){
                 case CLOSED:
@@ -411,15 +429,30 @@ void *seghandler(void* arg) {
     return 0;
 }
 
-server_tcb_t * find_tcb(int port){
+//find tcb找两次，第一次找两边端口号都匹配的；
+//若没找到，再找只有目的端口号匹配的，此时即为监听套接字
+server_tcb_t * find_tcb(int client_port int server_port int client_nodeID){
     int i = 0;
     while(i < MAX_TRANSPORT_CONNECTIONS){
-        if(tcbTable[i] != NULL && tcbTable[i]->server_portNum == port){
+        server_tcb_t *pTcb = tcbTable[i];
+        if( pTcb != NULL && pTcb->client_portNum = client_port &&
+            pTcb->server_portNum == server_port && pTcb->client_nodeID == client_nodeID){
             debug_printf("find item no.%d\n", i);
-            return tcbTable[i];
+            return pTcb;
         }
         i++;
     }
+    i = 0;
+    while(i < MAX_TRANSPORT_CONNECTIONS){
+        server_tcb_t *pTcb = tcbTable[i];
+        if( pTcb != NULL && pTcb->client_portNum == 0 &&
+            pTcb->server_portNum == server_port && pTcb->client_nodeID == client_nodeID){
+            debug_printf("find item no.%d\n", i);
+            return pTcb;
+        }
+        i++;
+    }
+
     return NULL;
 
 }

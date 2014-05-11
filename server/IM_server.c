@@ -8,7 +8,7 @@
 #include<string.h>
 #include<pthread.h>
 #include"stcp_server.h"
-#include"../header/IM.h"
+#include"../include/IM.h"
 
 #define SERV_PORT 6666
 #define LISTENQ 16

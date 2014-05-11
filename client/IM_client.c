@@ -8,7 +8,7 @@
 #include<curses.h>
 #include<unistd.h>
 #include "stcp_client.h"
-#include"../header/IM.h"
+#include"../include/IM.h"
 
 #define MAX_SIZE 1024
 #define SERV_PORT 6666

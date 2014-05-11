@@ -98,9 +98,9 @@ int stcp_client_sock(unsigned int client_port) {
             item->client_nodeID = topology_getMyNodeID();
             item->next_seqNum = 0;//data seq start from 0
             item->sendBufMutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
-            pthread_mutex_init(item->sendBufMutex, NULL);
             item->sendBufHead = NULL;
             item->sendBufunSent = NULL;
+            item->sendBufTail = NULL;
             item->unAck_segNum = 0;
             item->recvBuf = (char *)malloc(RECV_BUFFERSIZE);
             item->recvBufMutex = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t));
@@ -427,6 +427,27 @@ void *seghandler(void* arg) {
                         }
                         pthread_mutex_unlock(item->sendBufMutex);
                     }
+                    else if(recv_seg.header.type == DATA){
+                        if (pSeg->header.seq_num == pTcb->expect_seqNum){
+                            //push data to buffer
+                            pTcb->expect_seqNum += pSeg->header.length;
+                            assert(pTcb->usedBufLen + pSeg->header.length < BUFFERSIZE);
+                            pthread_mutex_lock(pTcb->recvBufMutex);
+                            char *buf_tail = pTcb->recvBuf + pTcb->usedBufLen;
+                            for (int i = 0; i < pSeg->header.length; i++){
+                                buf_tail[i] = pSeg->data[i];
+                            }
+                            pTcb->usedBufLen += pSeg->header.length;
+                            pthread_mutex_unlock(pTcb->recvBufMutex);
+                        }
+                        seg_t response;
+                        response.header.type = DATAACK;
+                        response.header.dest_port = pSeg->header.src_port;
+                        response.header.src_port = pSeg->header.dest_port;
+                        response.header.ack_num = pTcb->expect_seqNum;
+                        response.header.length = 0;
+                        sip_sendseg(stcp_sock, &response, *server_nodeID);
+                    }           
                     break;
                 }
             case FINWAIT:

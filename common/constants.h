@@ -12,7 +12,7 @@
 /*******************************************************************/
 
 //这是STCP可以支持的最大连接数. 你的TCB表应包含MAX_TRANSPORT_CONNECTIONS个条目.
-#define MAX_TRANSPORT_CONNECTIONS 10
+#define MAX_TRANSPORT_CONNECTIONS 15
 //最大段长度
 //MAX_SEG_LEN = 1500 - sizeof(seg header) - sizeof(ip header)
 //#define MAX_SEG_LEN  1464
