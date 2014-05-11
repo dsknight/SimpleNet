@@ -116,7 +116,7 @@ int stcp_client_sock(unsigned int client_port) {
 //
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //
-int stcp_client_connect(int sockfd, unsigned int server_port, int nodeID) {
+int stcp_client_connect(int sockfd, int nodeID, unsigned int server_port) {
     client_tcb_t *item = tcb_table[sockfd];
     if (item == NULL){
         printf("in %s : sockfd invalid!\n", __func__);
@@ -409,6 +409,7 @@ void *seghandler(void* arg) {
                 }
         }
     }
+    printf("seghandler exit(this shouldn't happen\n)");
     return 0;
 }
 

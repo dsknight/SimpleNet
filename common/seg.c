@@ -136,12 +136,15 @@ int sip_recvseg(int sip_conn, seg_t* segPtr, int *src_nodeID)
                     if(ch == '#'){
                         if (seglost(segPtr) == 1){
                             printf("we lost a pack\n");
+                            state = 0;
                             continue;
                         }
                         if (checkchecksum(segPtr) == -1){
                             printf("checksum error, abandom the pack\n");
+                            state = 0;
                             continue;
                         }
+                        debug_printf("recv seg info:\ttype:%u\tack:%d\tseq:%d\n", segPtr->header.type, segPtr->header.ack_num, segPtr->header.seq_num);
                         return 1;
                     }
                     else
@@ -181,6 +184,7 @@ int getsegToSend(int stcp_conn, seg_t* segPtr, int *dest_nodeID)
                             printf("error occurs when readn in %s\n",__func__);
                             return -1;
                         }
+                        debug_printf("send seg info:\ttype:%u\tack:%d\tseq:%d\n", segPtr->header.type, segPtr->header.ack_num, segPtr->header.seq_num);
                     }
                     else 
                         state = 0;

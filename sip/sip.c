@@ -30,7 +30,7 @@
 #include "routingtable.h"
 
 //SIP层等待这段时间让SIP路由协议建立路由路径. 
-#define SIP_WAITTIME 60
+#define SIP_WAITTIME 15
 
 /**************************************************************/
 //声明全局变量
@@ -137,10 +137,10 @@ void* pkthandler(void* arg) {
 
     while(1) {
         if (son_recvpkt(&pkt,son_conn)>0) {
-            printf("Routing: received a packet from neighbor %d\n",pkt.header.src_nodeID);
             switch(pkt.header.type){
                 case SIP:
                     {
+                        printf("get a pkt to forward, from %d to %d\n", pkt.header.src_nodeID, pkt.header.dest_nodeID);
                         if (pkt.header.dest_nodeID == topology_getMyNodeID()){
                             forwardsegToSTCP(stcp_conn, (seg_t *)pkt.data ,pkt.header.src_nodeID); 
                         } else {
@@ -171,8 +171,8 @@ void* pkthandler(void* arg) {
                         pthread_mutex_unlock(dv_mutex);
 
                         update_routingtable();
-                        dvtable_print(dv);
-                        routingtable_print(routingtable);
+                        //dvtable_print(dv);
+                        //routingtable_print(routingtable);
                         break;
                     }
                 default:
@@ -215,7 +215,7 @@ void waitSTCP() {
 
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    servaddr.sin_port = htons(SON_PORT);
+    servaddr.sin_port = htons(SIP_PORT);
 
     bind(listenfd,(struct sockaddr*)&servaddr,sizeof(servaddr));
     listen(listenfd,8);
@@ -229,14 +229,14 @@ void waitSTCP() {
             int next_nodeID = routingtable_getnextnode(routingtable,dest_nodeID);
             sip_pkt_t pkt;
             pkt.header.dest_nodeID = dest_nodeID;
-            pkt.header.src_nodeID = topology_getMyNodeID;
+            pkt.header.src_nodeID = topology_getMyNodeID();
             pkt.header.length = strlen((char*)&seg);
             pkt.header.type = SIP;
             memcpy(pkt.data,&seg,sizeof(seg_t));
             son_sendpkt(next_nodeID,&pkt,son_conn);
         }
         else{
-            printf("get seg from stcp failed\n");
+            //printf("get seg from stcp failed\n");
             continue;
         }
     }

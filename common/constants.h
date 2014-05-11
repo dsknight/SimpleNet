@@ -18,7 +18,7 @@
 //#define MAX_SEG_LEN  1464
 #define MAX_SEG_LEN 200
 //数据包丢失率为10%
-#define PKT_LOSS_RATE 0.1
+#define PKT_LOSS_RATE 0.05
 //SYN_TIMEOUT值, 单位为纳秒
 #define SYN_TIMEOUT 500000000
 //FIN_TIMEOUT值, 单位为纳秒
@@ -47,10 +47,10 @@
 /*******************************************************************/
 
 //这个端口号用于重叠网络中节点之间的互联, 你应该修改它为一个随机值以避免和其他同学的设置发生冲突
-#define CONNECTION_PORT 3022
+#define CONNECTION_PORT 3042
 
 //这个端口号由SON进程打开, 并由SIP进程连接, 你应该修改它为一个随机值以避免和其他同学的设置发生冲突.
-#define SON_PORT 3522
+#define SON_PORT 3577
 
 //最大SIP报文数据长度: 1500 - sizeof(sip header)
 #define MAX_PKT_LEN 1488 
@@ -68,7 +68,7 @@
 #define INFINITE_COST 999
 
 //SIP进程打开这个端口并等待来自STCP进程的连接, 你应该修改它为一个随机值以避免和其他同学的设置发生冲突.
-#define SIP_PORT 4022
+#define SIP_PORT 4422
 
 //这是广播节点ID. 
 #define BROADCAST_NODEID 9999
