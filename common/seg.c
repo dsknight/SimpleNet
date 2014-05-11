@@ -136,10 +136,12 @@ int sip_recvseg(int sip_conn, seg_t* segPtr, int *src_nodeID)
                     if(ch == '#'){
                         if (seglost(segPtr) == 1){
                             printf("we lost a pack\n");
+                            state = 0;
                             continue;
                         }
                         if (checkchecksum(segPtr) == -1){
                             printf("checksum error, abandom the pack\n");
+                            state = 0;
                             continue;
                         }
                         return 1;
