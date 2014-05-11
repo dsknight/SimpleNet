@@ -7,6 +7,7 @@
 #include<arpa/inet.h>
 #include<curses.h>
 #include<unistd.h>
+#include "stcp_client.h"
 #include"../header/IM.h"
 
 #define MAX_SIZE 1024

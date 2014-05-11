@@ -32,11 +32,15 @@ typedef struct client_tcb {
 	unsigned int client_portNum;    //客户端端口号
 	unsigned int state;     	//客户端状态
 	unsigned int next_seqNum;       //新段准备使用的下一个序号 
-	pthread_mutex_t* bufMutex;      //发送缓冲区互斥量
+	pthread_mutex_t* sendBufMutex;      //发送缓冲区互斥量
 	segBuf_t* sendBufHead;          //发送缓冲区头
 	segBuf_t* sendBufunSent;        //发送缓冲区中的第一个未发送段
 	segBuf_t* sendBufTail;          //发送缓冲区尾
 	unsigned int unAck_segNum;      //已发送但未收到确认段的数量
+    unsigned int expect_seqNum;
+    char* recvBuf;
+    unsigned int usedBufLen;
+    pthread_mutex_t* recvBufMutex;
 } client_tcb_t;
 
 //

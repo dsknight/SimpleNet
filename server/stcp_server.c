@@ -14,10 +14,42 @@
 #include "debug.h"
 #include "../topology/topology.h"
 
-#define BUFFERSIZE 1000000
 
 extern server_tcb_t *find_tcb(int);
 extern void *timeout(void *);
+
+static server_tcb_t *tcbTable[MAX_TRANSPORT_CONNECTIONS];
+static int stcp_sock;
+
+static void add_to_buffer(client_tcb_t *item, void *data, unsigned int length){
+    segBuf_t *pSegBuf = (segBuf_t *)malloc(sizeof(segBuf_t));
+    memset(pSegBuf,0,sizeof(segBuf_t));
+    pSegBuf->seg.header.src_port = item->client_portNum;
+    pSegBuf->seg.header.dest_port = item->server_portNum;
+    pSegBuf->seg.header.length = length;
+    pSegBuf->seg.header.seq_num = item->next_seqNum;
+    pSegBuf->seg.header.type = DATA;
+    memcpy(pSegBuf->seg.data,data,length); 
+    //fill next and time of this segBUf
+    pSegBuf->next = NULL;
+    //modify the TCB item,insert the segBuf to tail
+    item->next_seqNum += length;
+    pthread_mutex_lock(item->sendBufMutex);
+    if(item->sendBufHead == NULL){//init head,tail and start segBuf_timer()
+        usleep(SENDBUF_POLLING_INTERVAL/1000);//in case the timer have not exit
+        item->sendBufHead = pSegBuf;
+        item->sendBufTail = pSegBuf;
+        item->sendBufunSent = pSegBuf;
+        pthread_create(&segBuf_timer_tid,NULL,sendBuf_timer,(void*)item);
+    }
+    else{
+        item->sendBufTail->next = pSegBuf;
+        item->sendBufTail = pSegBuf;
+        if (item->sendBufunSent == NULL)
+            item->sendBufunSent = item->sendBufTail;
+    }
+    pthread_mutex_unlock(item->sendBufMutex);
+}
 /*面向应用层的接口*/
 
 //
@@ -36,13 +68,13 @@ extern void *timeout(void *);
 // 服务器只有一个seghandler.
 //
 
-static server_tcb_t *tcbTable[MAX_TRANSPORT_CONNECTIONS];
 
 
 void stcp_server_init(int conn) {
     memset(tcbTable,0,sizeof(server_tcb_t *)*MAX_TRANSPORT_CONNECTIONS);
+    stcp_sock = conn;
     pthread_t tid;
-    pthread_create(&tid,NULL,seghandler,(void*)conn);
+    pthread_create(&tid,NULL,seghandler,NULL);
     return;
 }
 
@@ -63,11 +95,12 @@ int stcp_server_sock(unsigned int server_port) {
     tcbTable[sockfd]->server_portNum = server_port;
     tcbTable[sockfd]->server_nodeID = topology_getMyNodeID();
     tcbTable[sockfd]->state = CLOSED;
-    tcbTable[sockfd]->recvBuf = (char*)malloc(BUFFERSIZE);
+    tcbTable[sockfd]->recvBuf = (char*)malloc(RECV_BUFFERSIZE);
     tcbTable[sockfd]->usedBufLen = 0;
     tcbTable[sockfd]->expect_seqNum = 0;
-    tcbTable[sockfd]->bufMutex = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t));
-    pthread_mutex_init(tcbTable[sockfd]->bufMutex, NULL);
+    tcbTable[sockfd]->recvBufMutex = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t));
+    pthread_mutex_init(tcbTable[sockfd]->recvBufMutex, NULL);
+    pthread_mutex_init(tcbTable[sockfd]->sendBufMutex, NULL);
     return sockfd;
 }
 
@@ -88,6 +121,44 @@ int stcp_server_accept(int sockfd) {
     return 1;
 }
 
+int stcp_server_send(int sockfd, void* data, unsigned int length)
+{
+    client_tcb_t *item = tcb_table[sockfd];
+    if (item == NULL){
+        printf("invalid sockfd:%d\n", sockfd);
+        return -1;
+    }
+    if(item->state != CONNECTED){
+        printf("can not send data,because the TCB state = %d\n",item->state);
+        return -1;
+    }
+
+    if (length <= MAX_SEG_LEN)
+        add_to_buffer(item, data, length);
+    else {
+        while(length > MAX_SEG_LEN){
+            add_to_buffer(item, data, MAX_SEG_LEN);
+            length -= MAX_SEG_LEN;
+            data += MAX_SEG_LEN;
+        }
+        if (length > 0)
+            add_to_buffer(item, data, length);
+    }
+
+    //send the segment
+    pthread_mutex_lock(item->sendBufMutex);
+    while(item->unAck_segNum < GBN_WINDOW && item->sendBufunSent != NULL){
+        item->sendBufunSent->sentTime = get_current_time();
+        sip_sendseg(stcp_sock, &item->sendBufunSent->seg, tcb_table[sockfd]->server_nodeID);
+        item->unAck_segNum++;
+        item->sendBufunSent = item->sendBufunSent->next;
+    }
+    pthread_mutex_unlock(item->sendBufMutex);
+
+    return 1;
+}
+
+
 // 接收来自STCP客户端的数据
 //
 // 这个函数接收来自STCP客户端的数据. 你不需要在本实验中实现它.
@@ -102,16 +173,16 @@ int stcp_server_recv(int sockfd, void* buf, unsigned int length) {
         printf("stcp not connect, cannot recv data\n");
         return -1;
     }
-    
+
     while(currTcb->usedBufLen < length){
         sleep(1);
     }
-    pthread_mutex_lock(currTcb->bufMutex);
+    pthread_mutex_lock(currTcb->recvBufMutex);
     memcpy(buf, currTcb->recvBuf, length);
     for (int i = 0; i < currTcb->usedBufLen - length; i++)
         currTcb->recvBuf[i] = currTcb->recvBuf[i + length];
     currTcb->usedBufLen -= length;
-    pthread_mutex_unlock(currTcb->bufMutex);
+    pthread_mutex_unlock(currTcb->recvBufMutex);
     return 1;
 }
 
@@ -126,7 +197,8 @@ int stcp_server_close(int sockfd) {
         return -1;
     server_tcb_t *pTcb = tcbTable[sockfd];
     free(pTcb->recvBuf);
-    free(pTcb->bufMutex);
+    free(pTcb->recvBufMutex);
+    free(pTcb->sendBufMutex);
     free(pTcb);
     tcbTable[sockfd] = NULL;
     return 1;
@@ -141,10 +213,9 @@ int stcp_server_close(int sockfd) {
 
 void *seghandler(void* arg) {
     pthread_detach(pthread_self());
-    int conn = (int)arg;
     seg_t * pSeg = (seg_t *)malloc(sizeof(seg_t));
     int *client_nodeID = (int *)malloc(sizeof(int));
-    while(sip_recvseg(conn,pSeg,client_nodeID)){
+    while(sip_recvseg(stcp_sock,pSeg,client_nodeID)){
         debug_printf("get a pack, to deal with it, it's type is %d\n", pSeg->header.type);
         server_tcb_t *pTcb = find_tcb(pSeg->header.dest_port);
         if(pTcb == NULL){
@@ -167,7 +238,7 @@ void *seghandler(void* arg) {
                         pSeg->header.dest_port = pSeg->header.src_port;
                         pSeg->header.src_port = pTcb->server_portNum;
                         debug_printf("state turn to connected from listening, try send synack by %d\n", conn);
-                        sip_sendseg(conn,pSeg,*client_nodeID);
+                        sip_sendseg(stcp_sock,pSeg,*client_nodeID);
                     }			
                     break;
                 case CONNECTED:
@@ -179,7 +250,7 @@ void *seghandler(void* arg) {
                         pSeg->header.dest_port = pSeg->header.src_port;
                         pSeg->header.src_port = pTcb->server_portNum;
                         debug_printf("state turn to connected from listening, try send synack by %d\n", conn);
-                        sip_sendseg(conn,pSeg,*client_nodeID);
+                        sip_sendseg(stcp_sock,pSeg,*client_nodeID);
                     }
                     break;
                 case CLOSEWAIT:
@@ -202,7 +273,7 @@ void *seghandler(void* arg) {
                         pSeg->header.type = FINACK;
                         pSeg->header.dest_port = pSeg->header.src_port;
                         pSeg->header.src_port = pTcb->server_portNum;
-                        sip_sendseg(conn,pSeg,*client_nodeID);
+                        sip_sendseg(stcp_sock,pSeg,*client_nodeID);
                         pthread_t tid;
                         pthread_create(&tid,NULL,timeout,(void *)pTcb);
                         break;
@@ -213,7 +284,7 @@ void *seghandler(void* arg) {
                         pSeg->header.type = FINACK;
                         pSeg->header.dest_port = pSeg->header.src_port;
                         pSeg->header.src_port = pTcb->server_portNum;
-                        sip_sendseg(conn,pSeg,*client_nodeID);
+                        sip_sendseg(stcp_sock,pSeg,*client_nodeID);
                         break;
                     }
                 default:break;	            
@@ -237,13 +308,13 @@ void *seghandler(void* arg) {
                             //push data to buffer
                             pTcb->expect_seqNum += pSeg->header.length;
                             assert(pTcb->usedBufLen + pSeg->header.length < BUFFERSIZE);
-                            pthread_mutex_lock(pTcb->bufMutex);
+                            pthread_mutex_lock(pTcb->recvBufMutex);
                             char *buf_tail = pTcb->recvBuf + pTcb->usedBufLen;
                             for (int i = 0; i < pSeg->header.length; i++){
                                 buf_tail[i] = pSeg->data[i];
                             }
                             pTcb->usedBufLen += pSeg->header.length;
-                            pthread_mutex_unlock(pTcb->bufMutex);
+                            pthread_mutex_unlock(pTcb->recvBufMutex);
                         }
                         seg_t response;
                         response.header.type = DATAACK;
@@ -251,7 +322,7 @@ void *seghandler(void* arg) {
                         response.header.src_port = pSeg->header.dest_port;
                         response.header.ack_num = pTcb->expect_seqNum;
                         response.header.length = 0;
-                        sip_sendseg(conn, &response, *client_nodeID);
+                        sip_sendseg(stcp_sock, &response, *client_nodeID);
                         break;
                     }
                 case CLOSEWAIT:
@@ -266,8 +337,69 @@ void *seghandler(void* arg) {
                     }
             }
         }
-        else if(pSeg->header.type == DATAACK){
-
+        else if(pSeg->header.type == DATAACK){ 
+            switch(pTcb->state){
+                case CLOSED:
+                    {
+                        printf("error occur: receive a dataack pack in state closed\n");
+                        break;
+                    }
+                case LISTENING:
+                    {
+                        printf("error occur: receive a dataack pack in state listening\n");
+                        break;
+                    }
+                case CONNECTED:
+                    {
+                        server_tcb_t *item = pTcb;
+                        segBuf_t *pSegBuf = item->sendBufHead;
+                        //delete the segBuf whose seq_num < ack_num
+                        pthread_mutex_lock(item->sendBufMutex);
+                        int seqNum = pSegBuf->seg.header.seq_num;
+                        while(seqNum < recv_seg.header.ack_num){
+                            if(item->sendBufHead == item->sendBufTail){//only one segBuf
+                                free(pSegBuf);
+                                pSegBuf = item->sendBufHead = item->sendBufTail = NULL;
+                                item->unAck_segNum = 0;
+                                break;
+                            }
+                            else{
+                                item->sendBufHead = item->sendBufHead->next;
+                                free(pSegBuf);
+                                pSegBuf = item->sendBufHead;
+                                item->unAck_segNum --;
+                            }
+                            seqNum = pSegBuf->seg.header.seq_num;
+                        }
+                        pthread_mutex_unlock(item->sendBufMutex);
+                        //send the unsent segBuf
+                        pthread_mutex_lock(item->sendBufMutex);
+                        while(item->sendBufunSent != NULL && item->unAck_segNum < GBN_WINDOW){
+                            pSegBuf = item->sendBufunSent;
+                            if(pSegBuf == NULL){
+                                pthread_mutex_unlock(item->sendBufMutex);
+                                break;
+                            }
+                            pSegBuf->sentTime = get_current_time();
+                            sip_sendseg(stcp_sock,&pSegBuf->seg,*server_nodeID);
+                            printf("in : %s, seq_num : %d has been sent\n", __func__,pSegBuf->seg.header.seq_num);
+                            item->sendBufunSent = item->sendBufunSent->next;
+                            item->unAck_segNum++;
+                        }
+                        pthread_mutex_unlock(item->sendBufMutex);
+                        break;
+                    }
+                case CLOSEWAIT:
+                    {
+                        printf("error occur: receive a dataack pack in state closewait\n");
+                        break;
+                    }
+                default:
+                    {
+                        assert(false);
+                        break;
+                    }
+            }
         }
         else{
             debug_printf("wrong segment type %d\n",pSeg->header.type);
@@ -300,11 +432,11 @@ void *timeout(void *arg){
         gettimeofday(&tv_curr,NULL);
         int timeuse = tv_curr.tv_sec - tv.tv_sec;
         if(timeuse > 4){
-                printf("CLOSE_WAIT_TIMEOUT\n");
-                server_tcb_t *p = (server_tcb_t *)arg;
-                if(p !=NULL)
-                    p -> state = CLOSED;
-                return NULL;
+            printf("CLOSE_WAIT_TIMEOUT\n");
+            server_tcb_t *p = (server_tcb_t *)arg;
+            if(p !=NULL)
+                p -> state = CLOSED;
+            return NULL;
         } 
         sleep(1);
     }

@@ -37,7 +37,7 @@ static void add_to_buffer(client_tcb_t *item, void *data, unsigned int length){
     pSegBuf->next = NULL;
     //modify the TCB item,insert the segBuf to tail
     item->next_seqNum += length;
-    pthread_mutex_lock(item->bufMutex);
+    pthread_mutex_lock(item->sendBufMutex);
     if(item->sendBufHead == NULL){//init head,tail and start segBuf_timer()
         usleep(SENDBUF_POLLING_INTERVAL/1000);//in case the timer have not exit
         item->sendBufHead = pSegBuf;
@@ -51,7 +51,7 @@ static void add_to_buffer(client_tcb_t *item, void *data, unsigned int length){
         if (item->sendBufunSent == NULL)
             item->sendBufunSent = item->sendBufTail;
     }
-    pthread_mutex_unlock(item->bufMutex);
+    pthread_mutex_unlock(item->sendBufMutex);
 }
 
 //
@@ -97,11 +97,17 @@ int stcp_client_sock(unsigned int client_port) {
             item->client_portNum = client_port;
             item->client_nodeID = topology_getMyNodeID();
             item->next_seqNum = 0;//data seq start from 0
-            item->bufMutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
-            pthread_mutex_init(item->bufMutex, NULL);
+            item->sendBufMutex = (pthread_mutex_t *)malloc(sizeof(pthread_mutex_t));
+            pthread_mutex_init(item->sendBufMutex, NULL);
             item->sendBufHead = NULL;
             item->sendBufunSent = NULL;
             item->unAck_segNum = 0;
+            item->recvBuf = (char *)malloc(RECV_BUFFERSIZE);
+            item->recvBufMutex = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t));
+            item->usedBufLen = 0;
+            item->expect_seqNum = 0;
+            pthread_mutex_init(item->sendBufMutex,NULL);
+            pthread_mutex_init(item->recvBufMutex,NULL);
             return i;
         }
     }
@@ -214,15 +220,39 @@ int stcp_client_send(int sockfd, void* data, unsigned int length)
     }
 
     //send the segment
-    pthread_mutex_lock(item->bufMutex);
+    pthread_mutex_lock(item->sendBufMutex);
     while(item->unAck_segNum < GBN_WINDOW && item->sendBufunSent != NULL){
         item->sendBufunSent->sentTime = get_current_time();
         sip_sendseg(stcp_sock, &item->sendBufunSent->seg, tcb_table[sockfd]->server_nodeID);
         item->unAck_segNum++;
         item->sendBufunSent = item->sendBufunSent->next;
     }
-    pthread_mutex_unlock(item->bufMutex);
+    pthread_mutex_unlock(item->sendBufMutex);
 
+    return 1;
+}
+
+
+int stcp_client_recv(int sockfd, void* buf, unsigned int length) {
+    server_tcb_t *currTcb = tcbTable[sockfd];
+    if (currTcb == NULL){
+        printf("invalid sockfd\n");
+        return -1;
+    }
+    if (currTcb->state != CONNECTED){
+        printf("stcp not connect, cannot recv data\n");
+        return -1;
+    }
+    
+    while(currTcb->usedBufLen < length){
+        sleep(1);
+    }
+    pthread_mutex_lock(currTcb->recvBufMutex);
+    memcpy(buf, currTcb->recvBuf, length);
+    for (int i = 0; i < currTcb->usedBufLen - length; i++)
+        currTcb->recvBuf[i] = currTcb->recvBuf[i + length];
+    currTcb->usedBufLen -= length;
+    pthread_mutex_unlock(currTcb->recvBufMutex);
     return 1;
 }
 
@@ -308,7 +338,9 @@ int stcp_client_close(int sockfd) {
         return -1;
     } else {
         printf("free tcb item %d memory successfully\n", sockfd);
-        free(item->bufMutex);
+        free(item->sendBufMutex);
+        free(item->recvBufMutex);
+        free(item->recvBuf);
         free(item);
         tcb_table[sockfd] = NULL;
         return 1;
@@ -361,7 +393,7 @@ void *seghandler(void* arg) {
                     if(recv_seg.header.type == DATAACK){
                         segBuf_t *pSegBuf = item->sendBufHead;
                         //delete the segBuf whose seq_num < ack_num
-                        pthread_mutex_lock(item->bufMutex);
+                        pthread_mutex_lock(item->sendBufMutex);
                         int seqNum = pSegBuf->seg.header.seq_num;
                         while(seqNum < recv_seg.header.ack_num){
                             if(item->sendBufHead == item->sendBufTail){//only one segBuf
@@ -378,13 +410,13 @@ void *seghandler(void* arg) {
                             }
                             seqNum = pSegBuf->seg.header.seq_num;
                         }
-                        pthread_mutex_unlock(item->bufMutex);
+                        pthread_mutex_unlock(item->sendBufMutex);
                         //send the unsent segBuf
-                        pthread_mutex_lock(item->bufMutex);
+                        pthread_mutex_lock(item->sendBufMutex);
                         while(item->sendBufunSent != NULL && item->unAck_segNum < GBN_WINDOW){
                             pSegBuf = item->sendBufunSent;
                             if(pSegBuf == NULL){
-                                pthread_mutex_unlock(item->bufMutex);
+                                pthread_mutex_unlock(item->sendBufMutex);
                                 break;
                             }
                             pSegBuf->sentTime = get_current_time();
@@ -393,7 +425,7 @@ void *seghandler(void* arg) {
                             item->sendBufunSent = item->sendBufunSent->next;
                             item->unAck_segNum++;
                         }
-                        pthread_mutex_unlock(item->bufMutex);
+                        pthread_mutex_unlock(item->sendBufMutex);
                     }
                     break;
                 }
@@ -441,7 +473,7 @@ void* sendBuf_timer(void* clienttcb)
             return NULL;
         }
         int now = get_current_time();
-        pthread_mutex_lock(currTcb->bufMutex);
+        pthread_mutex_lock(currTcb->sendBufMutex);
         if(now - pSegBuf->sentTime > 1){//time out
             for(int i = 0; i < currTcb->unAck_segNum; i++){
                 assert(pSegBuf != NULL);
@@ -451,7 +483,7 @@ void* sendBuf_timer(void* clienttcb)
                 pSegBuf = pSegBuf->next;
             }
         }
-        pthread_mutex_unlock(currTcb->bufMutex);
+        pthread_mutex_unlock(currTcb->sendBufMutex);
         usleep(SENDBUF_POLLING_INTERVAL/1000);
     }
     return NULL;

@@ -7,6 +7,7 @@
 #include<arpa/inet.h>
 #include<string.h>
 #include<pthread.h>
+#include"stcp_server.h"
 #include"../header/IM.h"
 
 #define SERV_PORT 6666

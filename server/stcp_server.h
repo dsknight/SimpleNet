@@ -25,11 +25,18 @@ typedef struct server_tcb {
 	unsigned int client_nodeID;     //客户端节点ID, 类似IP地址
 	unsigned int client_portNum;    //客户端端口号
 	unsigned int state;         	//服务器状态
-	unsigned int expect_seqNum;     //服务器期待的数据序号	
+	unsigned int expect_seqNum;     //服务器期待的数据序号
 	char* recvBuf;                  //指向接收缓冲区的指针
 	unsigned int  usedBufLen;       //接收缓冲区中已接收数据的大小
-	pthread_mutex_t* bufMutex;      //指向一个互斥量的指针, 该互斥量用于对接收缓冲区的访问
+	pthread_mutex_t* recvBufMutex;      //指向一个互斥量的指针, 该互斥量用于对接收缓冲区的访问
+    unsigned int next_seqNum;
+    pthread_mutex_t* sendBufMutex;
+    segBuf_t* sendBufHead;
+    segBuf_t* sendBufunSent;
+    segBuf_t* sendBufTail;
+    unsigned int unAck_segNum;
 } server_tcb_t;
+
 
 //
 //  用于服务器端应用程序的STCP套接字API. 

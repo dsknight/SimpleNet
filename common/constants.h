@@ -75,4 +75,8 @@
 
 //路由更新广播间隔, 以秒为单位
 #define ROUTEUPDATE_INTERVAL 5
+
+//接收缓存区最大长度
+#define RECV_BUFFERSIZE;
+
 #endif
