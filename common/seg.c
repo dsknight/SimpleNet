@@ -135,12 +135,12 @@ int sip_recvseg(int sip_conn, seg_t* segPtr, int *src_nodeID)
                 {
                     if(ch == '#'){
                         if (seglost(segPtr) == 1){
-                            printf("we lost a pack\n");
+                            //printf("we lost a pack\n");
                             state = 0;
                             continue;
                         }
                         if (checkchecksum(segPtr) == -1){
-                            printf("checksum error, abandom the pack\n");
+                            //printf("checksum error, abandom the pack\n");
                             state = 0;
                             continue;
                         }
@@ -232,7 +232,7 @@ int seglost(seg_t* segPtr) {
     if(random<PKT_LOSS_RATE*100) {
         //50%可能性丢失段
         if(rand()%2==0) {
-            printf("seg lost!!!\n");
+            //printf("seg lost!!!\n");
             return 1;
         }
         //50%可能性是错误的校验和

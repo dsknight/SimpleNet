@@ -143,21 +143,21 @@ int stcp_client_connect(int sockfd, unsigned int server_port, int nodeID) {
                 item->state = SYNSENT;
                 int try_times = 0;
                 sip_sendseg(stcp_sock, &syn_seg, nodeID);
-                printf("send syn\n");
+                //printf("send syn\n");
                 sleep(1);
                 while(item->state != CONNECTED && try_times <= SYN_MAX_RETRY){
                     try_times++;
                     debug_printf("send a pack with port %d\n", syn_seg.header.dest_port);
                     sip_sendseg(stcp_sock, &syn_seg, nodeID);
-                    printf("timeout, send syn again\n");
+                    //printf("timeout, send syn again\n");
                     sleep(1);
                 }
                 if (item->state == CONNECTED){
-                    printf("now stcp connected\n");
+                    //printf("now stcp connected\n");
                     return 1;
                 } else {
                     item->state = CLOSED;
-                    printf("stcp connect error\n");
+                    //printf("stcp connect error\n");
                     return -1;
                 }
                 break;
@@ -294,7 +294,7 @@ int stcp_client_disconnect(int sockfd) {
                 item->state = FINWAIT;
                 int try_times = 0;
                 sip_sendseg(stcp_sock, &fin_seg, tcb_table[sockfd]->server_nodeID);
-                printf("send fin\n");
+                //printf("send fin\n");
                 sleep(1);
                 while(item->state != CLOSED && try_times < FIN_MAX_RETRY){
                     try_times++;
@@ -380,7 +380,7 @@ void *seghandler(void* arg) {
             case SYNSENT:
                 {
                     if (recv_seg.header.type == SYNACK){
-                        printf("receive synack, turn to connected state\n");
+                        //printf("receive synack, turn to connected state\n");
                         item->state = CONNECTED;
                     } else {
                         printf("receice an useless pack when in synsent state\n");
@@ -421,7 +421,7 @@ void *seghandler(void* arg) {
                             }
                             pSegBuf->sentTime = get_current_time();
                             sip_sendseg(stcp_sock,&pSegBuf->seg,*server_nodeID);
-                            printf("in : %s, seq_num : %d has been sent\n", __func__,pSegBuf->seg.header.seq_num);
+                            //printf("in : %s, seq_num : %d has been sent\n", __func__,pSegBuf->seg.header.seq_num);
                             item->sendBufunSent = item->sendBufunSent->next;
                             item->unAck_segNum++;
                         }
@@ -486,7 +486,7 @@ void* sendBuf_timer(void* clienttcb)
     while(1){
         segBuf_t *pSegBuf = currTcb->sendBufHead;
         if(pSegBuf == NULL){
-            printf("segBuf now is empty,timer terminated\n");
+            //printf("segBuf now is empty,timer terminated\n");
             return NULL;
         }
         if(currTcb->state != CONNECTED){
@@ -500,7 +500,7 @@ void* sendBuf_timer(void* clienttcb)
                 assert(pSegBuf != NULL);
                 pSegBuf->sentTime = get_current_time();
                 sip_sendseg(stcp_sock,&pSegBuf->seg, currTcb->server_nodeID);
-                printf("in : %s, seq_num : %d has been resent\n",__func__,pSegBuf->seg.header.seq_num);
+                //printf("in : %s, seq_num : %d has been resent\n",__func__,pSegBuf->seg.header.seq_num);
                 pSegBuf = pSegBuf->next;
             }
         }

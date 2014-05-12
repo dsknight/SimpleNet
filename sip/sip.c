@@ -30,7 +30,7 @@
 #include "routingtable.h"
 
 //SIP层等待这段时间让SIP路由协议建立路由路径. 
-#define SIP_WAITTIME 60
+#define SIP_WAITTIME 10
 
 /**************************************************************/
 //声明全局变量
@@ -63,7 +63,7 @@ void update_routingtable (){
         int mincost = INFINITE_COST;
         int nextNodeID = -1;
         int j;
-        for (j = 0; j < nbr_num; j++){
+        for (j = 0; j <= nbr_num; j++){
             if (nct[j].cost + dvtable_getcost(dv, nct[j].nodeID, dv->dvEntry[i].nodeID) < mincost){
                 mincost = nct[j].cost + dvtable_getcost(dv, nct[j].nodeID, dv->dvEntry[i].nodeID);
                 nextNodeID = nct[j].nodeID;
@@ -142,7 +142,8 @@ void* pkthandler(void* arg) {
                 case SIP:
                     {
                         if (pkt.header.dest_nodeID == topology_getMyNodeID()){
-                            forwardsegToSTCP(stcp_conn, (seg_t *)pkt.data, pkt.header.src_nodeID); 
+                            forwardsegToSTCP(stcp_conn, (seg_t *)pkt.data, pkt.header.src_nodeID);
+                            printf("send to local stcp\n");
                         } else {
                             int nextnode = routingtable_getnextnode(routingtable, pkt.header.dest_nodeID);
                             if (nextnode == -1){
@@ -159,7 +160,7 @@ void* pkthandler(void* arg) {
                         int node_num = topology_getNodeNum();
                         int i,j;
                         pthread_mutex_lock(dv_mutex);
-                        for (i = 0; i < nbr_num; i++){
+                        for (i = 0; i <= nbr_num; i++){
                             if (dv[i].nodeID == pkt.header.src_nodeID){
                                 pkt_routeupdate_t *route_pkt = (pkt_routeupdate_t *)pkt.data;
                                 for (j = 0; j < node_num; j++){
@@ -216,25 +217,27 @@ void waitSTCP() {
 
     bind(listenfd,(struct sockaddr*)&servaddr,sizeof(servaddr));
     listen(listenfd,8);
-
-    stcp_conn = accept(listenfd,(struct sockaddr*)&cliaddr, &clilen);
-    printf("STCP is connected\n");
-    seg_t seg;
-    int dest_nodeID;
     while(1){
-        if(getsegToSend(stcp_conn,&seg,&dest_nodeID) == 1){
-            int next_nodeID = routingtable_getnextnode(routingtable,dest_nodeID);
-            sip_pkt_t pkt;
-            pkt.header.dest_nodeID = dest_nodeID;
-            pkt.header.src_nodeID = topology_getMyNodeID();
-            pkt.header.length = strlen((char*)&seg);
-            pkt.header.type = SIP;
-            memcpy(pkt.data,&seg,sizeof(seg_t));
-            son_sendpkt(next_nodeID,&pkt,son_conn);
-        }
-        else{
-            printf("get seg from stcp failed\n");
-            continue;
+        stcp_conn = accept(listenfd,(struct sockaddr*)&cliaddr, &clilen);
+        printf("STCP is connected\n");
+        seg_t seg;
+        int dest_nodeID;
+        while(1){
+            if(getsegToSend(stcp_conn,&seg,&dest_nodeID) == 1){
+                int next_nodeID = routingtable_getnextnode(routingtable,dest_nodeID);
+                sip_pkt_t pkt;
+                pkt.header.dest_nodeID = dest_nodeID;
+                pkt.header.src_nodeID = topology_getMyNodeID();
+                pkt.header.length = strlen((char*)&seg);
+                pkt.header.type = SIP;
+                memcpy(pkt.data,&seg,sizeof(seg_t));
+                son_sendpkt(next_nodeID,&pkt,son_conn);
+                printf("To SON, dest_nodeID = %d , next_nodeID = %d\n",dest_nodeID, next_nodeID);
+            }
+            else{
+                printf("get seg from stcp failed\n");
+                break;
+            }
         }
     }
 }

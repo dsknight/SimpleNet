@@ -96,6 +96,7 @@ void* waitNbrs(void* arg) {
 
     for(;bigger_node_num > 0;){
         cliaddr_len = sizeof(cliaddr);
+        printf("befroe accept\n");
         connfd = accept(listenfd, (struct sockaddr *)&cliaddr, &cliaddr_len);
         printf("receive a connection from %d\n", topology_getNodeIDfromip(&cliaddr.sin_addr));
         int client_nodeid = topology_getNodeIDfromip((&cliaddr.sin_addr));
@@ -132,6 +133,7 @@ int connectNbrs() {
                 return -1;
             }
             else {
+                printf("connect %d successfully\n",nt[i].nodeID);
                 if (nt_addconn(nt, nt[i].nodeID, sockfd) == -1) {
                     printf("error when addconn %d\n", nt[i].nodeID);
                     close(sockfd);

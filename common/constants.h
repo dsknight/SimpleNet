@@ -47,10 +47,10 @@
 /*******************************************************************/
 
 //这个端口号用于重叠网络中节点之间的互联, 你应该修改它为一个随机值以避免和其他同学的设置发生冲突
-#define CONNECTION_PORT 3022
+#define CONNECTION_PORT 3055
 
 //这个端口号由SON进程打开, 并由SIP进程连接, 你应该修改它为一个随机值以避免和其他同学的设置发生冲突.
-#define SON_PORT 3522
+#define SON_PORT 3525
 
 //最大SIP报文数据长度: 1500 - sizeof(sip header)
 #define MAX_PKT_LEN 1488 

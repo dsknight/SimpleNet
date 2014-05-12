@@ -16,8 +16,42 @@
 
 static ListHead thread_head;
 static pthread_mutex_t tnode_mutex;
+
+int connectToSIP() {
+    struct sockaddr_in servaddr;
+    int sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+    bzero(&servaddr, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    inet_pton(AF_INET, "127.0.0.1", &servaddr.sin_addr);
+    servaddr.sin_port = htons(SIP_PORT);
+    if (connect(sock_fd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0){
+        printf("error when connect to sip\n");
+        return -1;
+    }
+    return sock_fd;
+}
+
+//这个函数断开到本地SIP进程的TCP连接. 
+void disconnectToSIP(int sip_conn) {
+    close(sip_conn);	
+}
+
 int main()
 {
+    //init stcp
+	//用于丢包率的随机数种子
+	srand(time(NULL));
+
+	//连接到SIP进程并获得TCP套接字描述符
+	int sip_conn = connectToSIP();
+	if(sip_conn<0) {
+		printf("can not connect to the local SIP process\n");
+	}
+
+	//初始化STCP服务器
+	stcp_server_init(sip_conn);
+
+
 	printf("\033[1H\033[2J");
 	int listenfd,connfd;
 	
@@ -164,7 +198,7 @@ void *process_requests(void *tnode)//thread funtion,every thread deals with a co
 	free(my_tnode);
 	pthread_mutex_unlock(&tnode_mutex);
 	//free and exit
-	close(connfd);
+	stcp_server_close(connfd);
 	free(recv_packet);
 	free(send_packet);
 	pthread_exit(NULL);

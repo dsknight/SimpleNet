@@ -32,8 +32,8 @@ static inline unsigned int get_current_time(){
 static void add_to_buffer(server_tcb_t *item, void *data, unsigned int length){
     segBuf_t *pSegBuf = (segBuf_t *)malloc(sizeof(segBuf_t));
     memset(pSegBuf,0,sizeof(segBuf_t));
-    pSegBuf->seg.header.src_port = item->client_portNum;
-    pSegBuf->seg.header.dest_port = item->server_portNum;
+    pSegBuf->seg.header.src_port = item->server_portNum;
+    pSegBuf->seg.header.dest_port = item->client_portNum;
     pSegBuf->seg.header.length = length;
     pSegBuf->seg.header.seq_num = item->next_seqNum;
     pSegBuf->seg.header.type = DATA;
@@ -193,12 +193,13 @@ int stcp_server_recv(int sockfd, void* buf, unsigned int length) {
         printf("invalid sockfd\n");
         return -1;
     }
-    if (currTcb->state != CONNECTED){
-        printf("stcp not connect, cannot recv data\n");
-        return -1;
-    }
 
+    //这里要不停的判断当前状态，否则会在客户端退出时出错
     while(currTcb->usedBufLen < length){
+        if (currTcb->state != CONNECTED){
+            printf("stcp not connect, cannot recv data\n");
+            return -1;
+        }
         sleep(1);
     }
     pthread_mutex_lock(currTcb->recvBufMutex);
@@ -239,8 +240,8 @@ void *seghandler(void* arg) {
     pthread_detach(pthread_self());
     seg_t * pSeg = (seg_t *)malloc(sizeof(seg_t));
     int *client_nodeID = (int *)malloc(sizeof(int));
-    while(sip_recvseg(stcp_sock,pSeg,client_nodeID)){
-        debug_printf("get a pack, to deal with it, it's type is %d\n", pSeg->header.type);
+    while(sip_recvseg(stcp_sock,pSeg,client_nodeID) > 0){
+        printf("get a seg, to deal with it, it's type is %d\n", pSeg->header.type);
         server_tcb_t *pTcb = find_tcb(pSeg->header.src_port, pSeg->header.dest_port, *client_nodeID);
         if(pTcb == NULL){
             printf("wrong port %d\n",pSeg->header.dest_port);
@@ -429,7 +430,8 @@ void *seghandler(void* arg) {
         }
     }
 
-    free(pSeg);	
+    free(pSeg);
+    printf("sip_recvseg error\n");
     printf("now exit seghandler\n");
     return 0;
 }
@@ -437,6 +439,7 @@ void *seghandler(void* arg) {
 //find tcb找两次，第一次找两边端口号都匹配的；
 //若没找到，再找只有目的端口号匹配的，此时即为监听套接字
 server_tcb_t * find_tcb(int client_port, int server_port, int client_nodeID){
+    printf("recv a seg src:%d,dst:%d,srcID:%d\n",client_port,server_port,client_nodeID);
     int i = 0;
     while(i < MAX_TRANSPORT_CONNECTIONS){
         server_tcb_t *pTcb = tcbTable[i];
@@ -451,7 +454,7 @@ server_tcb_t * find_tcb(int client_port, int server_port, int client_nodeID){
     while(i < MAX_TRANSPORT_CONNECTIONS){
         server_tcb_t *pTcb = tcbTable[i];
         if( pTcb != NULL && pTcb->client_portNum == 0 &&
-            pTcb->server_portNum == server_port && pTcb->client_nodeID == client_nodeID){
+            pTcb->server_portNum == server_port && pTcb->client_nodeID == 0){
             debug_printf("find item no.%d\n", i);
             return pTcb;
         }
@@ -508,7 +511,7 @@ void* sendBuf_timer(void* servertcb)
             for(int i = 0; i < currTcb->unAck_segNum; i++){
                 assert(pSegBuf != NULL);
                 pSegBuf->sentTime = get_current_time();
-                sip_sendseg(stcp_sock,&pSegBuf->seg, currTcb->server_nodeID);
+                sip_sendseg(stcp_sock,&pSegBuf->seg, currTcb->client_nodeID);
                 printf("in : %s, seq_num : %d has been resent\n",__func__,pSegBuf->seg.header.seq_num);
                 pSegBuf = pSegBuf->next;
             }

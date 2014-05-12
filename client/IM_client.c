@@ -14,6 +14,7 @@
 
 #define MAX_SIZE 1024
 #define SERV_PORT 6666
+#define CLIENT_PORT 5555
 
 static ListHead name_head;
 static pthread_mutex_t nnode_mutex;
@@ -116,7 +117,7 @@ int main()
 	int sockfd;
 
 	// socket init
-	if((sockfd = stcp_client_sock(SERV_PORT)) <0)
+	if((sockfd = stcp_client_sock(CLIENT_PORT)) <0)
 	{
 		perror("Problem in connecting to the server!\n");
 		exit(1);
