@@ -77,6 +77,6 @@
 #define ROUTEUPDATE_INTERVAL 5
 
 //接收缓存区最大长度
-#define RECV_BUFFERSIZE;
+#define RECV_BUFFERSIZE 10000
 
 #endif

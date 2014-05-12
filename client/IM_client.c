@@ -9,6 +9,8 @@
 #include<unistd.h>
 #include "stcp_client.h"
 #include"../include/IM.h"
+#include"../common/constants.h"
+#include"../topology/topology.h"
 
 #define MAX_SIZE 1024
 #define SERV_PORT 6666
@@ -17,6 +19,26 @@ static ListHead name_head;
 static pthread_mutex_t nnode_mutex;
 static WINDOW *title_win,*display_win,*input_win,*name_win,*display_box,*input_box,*name_box;
 static char nick_name[MAX_SIZE];
+
+//这个函数连接到本地SIP进程的端口SIP_PORT. 如果TCP连接失败, 返回-1. 连接成功, 返回TCP套接字描述符, STCP将使用该描述符发送段.
+int connectToSIP() {
+    struct sockaddr_in servaddr;
+    int sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+    bzero(&servaddr, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    inet_pton(AF_INET, "127.0.0.1", &servaddr.sin_addr);
+    servaddr.sin_port = htons(SIP_PORT);
+    if (connect(sock_fd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0){
+        printf("error when connect to sip\n");
+        return -1;
+    }
+    return sock_fd;
+}
+
+//这个函数断开到本地SIP进程的TCP连接. 
+void disconnectToSIP(int sip_conn) {
+    close(sip_conn);	
+}
 
 void window_init(){
 	//init boxes,boxes have boader,contain window
@@ -65,6 +87,22 @@ int name_valid(char * name){
 
 int main()
 {
+    //init stcp
+    //用于丢包率的随机数种子
+	srand(time(NULL));
+
+	//连接到SIP进程并获得TCP套接字描述符	
+	int sip_conn = connectToSIP();
+	if(sip_conn<0) {
+		printf("fail to connect to the local SIP process\n");
+		exit(1);
+	}
+
+	//初始化stcp客户端
+	stcp_client_init(sip_conn);
+	sleep(1);
+
+
 	//show basic information
 	printf("\033[1H\033[2J");
 	printf("Welcome to BiuBiuBiu IM system!\nYou need a nick name (4-10 characters, not BiuBiuBiu, no $):");
@@ -76,22 +114,16 @@ int main()
 	}
 
 	int sockfd;
-	struct sockaddr_in servaddr;
-	//char sendline[MAX_SIZE],recvline[MAX_SIZE];
 
 	// socket init
-	if((sockfd = socket(AF_INET,SOCK_STREAM,0)) <0)
+	if((sockfd = stcp_client_sock(SERV_PORT)) <0)
 	{
 		perror("Problem in connecting to the server!\n");
 		exit(1);
 	}
 
-	memset(&servaddr,0,sizeof(servaddr));
-	servaddr.sin_family = AF_INET;
-	servaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
-	servaddr.sin_port = htons(SERV_PORT);
 
-	if(connect(sockfd,(struct sockaddr*)&servaddr,sizeof(servaddr)) <0)
+	if(stcp_client_connect(sockfd,SERV_PORT,topology_getNodeIDfromname("csnetlab_4")) <0)
 	{
 		perror("Problem in connecting to the server!\n");
 		exit(2);
@@ -102,10 +134,10 @@ int main()
 	packet_init(send_packet);
 	send_packet->service = 0;
 	strncpy(send_packet->data,nick_name,strlen(nick_name)-1);
-	send(sockfd,(char*)send_packet,sizeof(Biu_Packet),0);
+	stcp_client_send(sockfd,(char*)send_packet,sizeof(Biu_Packet));
 
 	struct Biu_Packet *recv_packet = (struct Biu_Packet*)malloc(sizeof(Biu_Packet));
-	if(recv(sockfd,(char*)(recv_packet),sizeof(Biu_Packet),0) == 0)
+	if(stcp_client_recv(sockfd,(char*)(recv_packet),sizeof(Biu_Packet)) < 0)
 	{
 		perror("The server terminated prematurely\n");
 		exit(3);
@@ -123,8 +155,8 @@ int main()
 		}
 		memset(&send_packet->data,0,64);
 		strncpy(send_packet->data,nick_name,strlen(nick_name)-1);
-		send(sockfd,(char*)send_packet,sizeof(Biu_Packet),0);
-		if(recv(sockfd,(char*)(recv_packet),sizeof(Biu_Packet),0) == 0)
+		stcp_client_send(sockfd,(char*)send_packet,sizeof(Biu_Packet));
+		if(stcp_client_recv(sockfd,(char*)(recv_packet),sizeof(Biu_Packet)) < 0)
 		{
 			perror("The server terminated prematurely\n");
 			exit(3);
@@ -158,7 +190,15 @@ int main()
 		//content is valid and process
 		if(strlen(content) == 1){
 			if(content[0] == '#'){
-				endwin();
+                if(stcp_client_disconnect(sockfd)<0) {
+                    printf("fail to disconnect from stcp server\n");
+                    exit(1);
+                }
+                if(stcp_client_close(sockfd)<0) {
+                    printf("fail to close stcp client\n");
+                    exit(1);
+                }
+                endwin();
 				exit(0);
 			}
 			else if(content[0] == '$'){
@@ -179,7 +219,7 @@ int main()
 				strncpy(send_packet->dstname,"BiuBiuBiu",12);
 				strncpy(send_packet->data,content,64);
 				send_packet->service = 4;
-				send(sockfd,(char*)send_packet,sizeof(Biu_Packet),0);
+				stcp_client_send(sockfd,(char*)send_packet,sizeof(Biu_Packet));
 			}
 			else{//send to one
 
@@ -193,7 +233,7 @@ int main()
 				}
 				strncpy(send_packet->data,content+divide+1,64);
 				send_packet->service = 4;
-				send(sockfd,(char*)send_packet,sizeof(Biu_Packet),0);
+				stcp_client_send(sockfd,(char*)send_packet,sizeof(Biu_Packet));
 			}
 		}
 
@@ -201,13 +241,14 @@ int main()
 
 	free(send_packet);
 	free(recv_packet);
+    disconnectToSIP(sip_conn);
 	exit(0);
 }
 
 void *recv_messages(void *sockfd)
 {
 	Biu_Packet packet;
-	while(recv((int)sockfd,(char*)&packet,sizeof(Biu_Packet),0) > 0)
+	while(stcp_client_recv((int)sockfd,(char*)&packet,sizeof(Biu_Packet)) > 0)
 	{
 		if(packet.service <= 1 || packet.service == 4 || packet.service > 6){
 			printf("service error:%d\n",packet.service);

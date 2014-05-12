@@ -142,7 +142,7 @@ void* pkthandler(void* arg) {
                 case SIP:
                     {
                         if (pkt.header.dest_nodeID == topology_getMyNodeID()){
-                            forwardsegToSTCP(stcp_conn, pkt.header.src_nodeID, (seg_t *)pkt.data); 
+                            forwardsegToSTCP(stcp_conn, (seg_t *)pkt.data, pkt.header.src_nodeID); 
                         } else {
                             int nextnode = routingtable_getnextnode(routingtable, pkt.header.dest_nodeID);
                             if (nextnode == -1){
@@ -212,7 +212,7 @@ void waitSTCP() {
 
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    servaddr.sin_port = htons(SON_PORT);
+    servaddr.sin_port = htons(SIP_PORT);
 
     bind(listenfd,(struct sockaddr*)&servaddr,sizeof(servaddr));
     listen(listenfd,8);
@@ -226,7 +226,7 @@ void waitSTCP() {
             int next_nodeID = routingtable_getnextnode(routingtable,dest_nodeID);
             sip_pkt_t pkt;
             pkt.header.dest_nodeID = dest_nodeID;
-            pkt.header.src_nodeID = topology_getMyNodeID;
+            pkt.header.src_nodeID = topology_getMyNodeID();
             pkt.header.length = strlen((char*)&seg);
             pkt.header.type = SIP;
             memcpy(pkt.data,&seg,sizeof(seg_t));

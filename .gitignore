@@ -11,3 +11,4 @@ client/app_stress_client
 server/app_simple_server
 server/app_stress_server
 server/receivedtext.txt
+*.sh

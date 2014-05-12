@@ -18,6 +18,13 @@
 #define	CONNECTED 3
 #define	CLOSEWAIT 4
 
+
+typedef struct segBuf {
+        seg_t seg;
+        unsigned int sentTime;
+        struct segBuf* next;
+} segBuf_t;
+
 //服务器传输控制块. 一个STCP连接的服务器端使用这个数据结构记录连接信息.
 typedef struct server_tcb {
 	unsigned int server_nodeID;        //服务器节点ID, 类似IP地址
@@ -78,7 +85,7 @@ int stcp_server_accept(int sockfd);
 //
 
 int stcp_server_recv(int sockfd, void* buf, unsigned int length);
-
+int stcp_server_send(int sockfd, void* data, unsigned int length);
 // 接收来自STCP客户端的数据. 请回忆STCP使用的是单向传输, 数据从客户端发送到服务器端.
 // 信号/控制信息(如SYN, SYNACK等)则是双向传递. 这个函数每隔RECVBUF_POLLING_INTERVAL时间
 // 就查询接收缓冲区, 直到等待的数据到达, 它然后存储数据并返回1. 如果这个函数失败, 则返回-1.
@@ -104,5 +111,11 @@ void* seghandler(void* arg);
 //
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //
+//
+void* sendBuf_timer(void* clienttcb);
+//这个线程持续轮询发送缓冲区以触发超时事件. 如果发送缓冲区非空, 它应一直运行.
+//如果(当前时间 - 第一个已发送但未被确认段的发送时间) > DATA_TIMEOUT, 就发生一次超时事件.
+// 当超时事件发生时, 重新发送所有已发送但未被确认段. 当发送缓冲区为空时, 这个线程将终止.
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 #endif

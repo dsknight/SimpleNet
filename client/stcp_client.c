@@ -234,7 +234,7 @@ int stcp_client_send(int sockfd, void* data, unsigned int length)
 
 
 int stcp_client_recv(int sockfd, void* buf, unsigned int length) {
-    server_tcb_t *currTcb = tcbTable[sockfd];
+    client_tcb_t *currTcb = tcb_table[sockfd];
     if (currTcb == NULL){
         printf("invalid sockfd\n");
         return -1;
@@ -428,23 +428,23 @@ void *seghandler(void* arg) {
                         pthread_mutex_unlock(item->sendBufMutex);
                     }
                     else if(recv_seg.header.type == DATA){
-                        if (pSeg->header.seq_num == pTcb->expect_seqNum){
+                        if (recv_seg.header.seq_num == item->expect_seqNum){
                             //push data to buffer
-                            pTcb->expect_seqNum += pSeg->header.length;
-                            assert(pTcb->usedBufLen + pSeg->header.length < BUFFERSIZE);
-                            pthread_mutex_lock(pTcb->recvBufMutex);
-                            char *buf_tail = pTcb->recvBuf + pTcb->usedBufLen;
-                            for (int i = 0; i < pSeg->header.length; i++){
-                                buf_tail[i] = pSeg->data[i];
+                            item->expect_seqNum += recv_seg.header.length;
+                            assert(item->usedBufLen + recv_seg.header.length < RECV_BUFFERSIZE);
+                            pthread_mutex_lock(item->recvBufMutex);
+                            char *buf_tail = item->recvBuf + item->usedBufLen;
+                            for (int i = 0; i < recv_seg.header.length; i++){
+                                buf_tail[i] = recv_seg.data[i];
                             }
-                            pTcb->usedBufLen += pSeg->header.length;
-                            pthread_mutex_unlock(pTcb->recvBufMutex);
+                            item->usedBufLen += recv_seg.header.length;
+                            pthread_mutex_unlock(item->recvBufMutex);
                         }
                         seg_t response;
                         response.header.type = DATAACK;
-                        response.header.dest_port = pSeg->header.src_port;
-                        response.header.src_port = pSeg->header.dest_port;
-                        response.header.ack_num = pTcb->expect_seqNum;
+                        response.header.dest_port = recv_seg.header.src_port;
+                        response.header.src_port = recv_seg.header.dest_port;
+                        response.header.ack_num = item->expect_seqNum;
                         response.header.length = 0;
                         sip_sendseg(stcp_sock, &response, *server_nodeID);
                     }           

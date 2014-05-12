@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <string.h>
 #include <errno.h>
+#include <unistd.h>
 #include "topology.h"
 #include "../common/constants.h"
 

@@ -20,33 +20,21 @@ int main()
 {
 	printf("\033[1H\033[2J");
 	int listenfd,connfd;
-	socklen_t clilen;
-	struct sockaddr_in cliaddr,servaddr;
 	
 	//initialize two list heads and mutex
 	list_init(&thread_head);
 	pthread_mutex_init(&tnode_mutex,NULL);
 
 	//printf("$$$$$$$thread_head:%d$$$$$$$$\n",(int)&thread_head);
-	if((listenfd = socket(AF_INET,SOCK_STREAM,0)) < 0)
+	if((listenfd = stcp_server_sock(SERV_PORT)) < 0)
 	{
 		perror("Problem in creating the socket\n");
 		exit(1);
 	}
-	
-	servaddr.sin_family = AF_INET;
-	servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-	servaddr.sin_port = htons(SERV_PORT);
-
-	bind(listenfd,(struct sockaddr*)&servaddr,sizeof(servaddr));
-
-	listen(listenfd,LISTENQ);
-	printf("Server is now waiting for connections\n");
 
 	while(1)
 	{
-		clilen = sizeof(cliaddr);
-		connfd = accept(listenfd,(struct sockaddr*)&cliaddr,&clilen);
+		connfd = stcp_server_accept(listenfd);
 		thread_node *tnode = (thread_node *)malloc(sizeof(thread_node));
 		memset(tnode,0,sizeof(thread_node));
 		tnode->sockfd = connfd;
@@ -71,7 +59,7 @@ void *process_requests(void *tnode)//thread funtion,every thread deals with a co
 	int recv_bytes,connfd =	my_tnode->sockfd;
 	struct Biu_Packet *recv_packet = (Biu_Packet*)malloc(sizeof(Biu_Packet));
 	struct Biu_Packet *send_packet = (Biu_Packet*)malloc(sizeof(Biu_Packet));
-	while((recv_bytes = recv(connfd,(char*)recv_packet,sizeof(Biu_Packet),0)) > 0)
+	while((recv_bytes = stcp_server_recv(connfd,(char*)recv_packet,sizeof(Biu_Packet))) > 0)
 	{
 		printf("\nPacket received from a client,service = %d\n",recv_packet->service);
 		if(recv_packet->service == 0){//request for valid name
@@ -80,7 +68,7 @@ void *process_requests(void *tnode)//thread funtion,every thread deals with a co
 			send_packet->service = 1;
 			send_packet->status = is_name_exists(recv_packet->data) ? 0 : 1;
 			strncpy(send_packet->data,recv_packet->data,64);
-			send(connfd,(char*)send_packet,sizeof(Biu_Packet),0);
+			stcp_server_send(connfd,(char*)send_packet,sizeof(Biu_Packet));
 			printf("========== response for name %s has been sent==========\n",recv_packet->data);
 			if(send_packet->status){//if the name is valid
 				pthread_mutex_lock(&tnode_mutex);
@@ -91,7 +79,7 @@ void *process_requests(void *tnode)//thread funtion,every thread deals with a co
 				list_foreach(ptr,&thread_head){
 					if(ptr == &my_tnode->list)
 						continue;//do not send login msg to himself
-					send(list_entry(ptr,thread_node,list)->sockfd,(char*)send_packet,sizeof(Biu_Packet),0);
+					stcp_server_send(list_entry(ptr,thread_node,list)->sockfd,(char*)send_packet,sizeof(Biu_Packet));
 
 				}
 
@@ -103,13 +91,13 @@ void *process_requests(void *tnode)//thread funtion,every thread deals with a co
 					strncpy(send_packet->data + 12*cnt,list_entry(ptr,thread_node,list)->name,12);
 					cnt = (cnt+1) % 5;
 					if(cnt == 0){
-						send(connfd,(char*)send_packet,sizeof(Biu_Packet),0);
+						stcp_server_send(connfd,(char*)send_packet,sizeof(Biu_Packet));
 						memset(&send_packet->data,0,64);
 					}
 				}
 				pthread_mutex_unlock(&tnode_mutex);
 				if(strlen(send_packet->data) != 0){//every 5 name send a packet,now send the remainings
-					send(connfd,(char*)send_packet,sizeof(Biu_Packet),0);
+					stcp_server_send(connfd,(char*)send_packet,sizeof(Biu_Packet));
 				}
 				printf("=====name %s is valid and name list has been sent to him======\n",recv_packet->data);
 
@@ -126,14 +114,14 @@ void *process_requests(void *tnode)//thread funtion,every thread deals with a co
 			if(strcmp(recv_packet->dstname,"BiuBiuBiu") == 0){
 				pthread_mutex_lock(&tnode_mutex);
 				list_foreach(ptr,&thread_head){
-					send(list_entry(ptr,thread_node,list)->sockfd,(char*)send_packet,sizeof(Biu_Packet),0);
+					stcp_server_send(list_entry(ptr,thread_node,list)->sockfd,(char*)send_packet,sizeof(Biu_Packet));
 				}
 				pthread_mutex_unlock(&tnode_mutex);
 			}
 			else{
 				if(!is_name_exists(recv_packet->dstname)){
 					send_packet->status = 0;
-					send(connfd,(char*)send_packet,sizeof(Biu_Packet),0);	
+					stcp_server_send(connfd,(char*)send_packet,sizeof(Biu_Packet));	
 				}
 				else{
 					int sockfd;
@@ -145,8 +133,8 @@ void *process_requests(void *tnode)//thread funtion,every thread deals with a co
 						}
 					}	
 					pthread_mutex_unlock(&tnode_mutex);
-					send(sockfd,(char*)send_packet,sizeof(Biu_Packet),0);
-					send(connfd,(char*)send_packet,sizeof(Biu_Packet),0);//send the response to both side
+					stcp_server_send(sockfd,(char*)send_packet,sizeof(Biu_Packet));
+					stcp_server_send(connfd,(char*)send_packet,sizeof(Biu_Packet));//send the response to both side
 				}
 			}
 
@@ -167,7 +155,7 @@ void *process_requests(void *tnode)//thread funtion,every thread deals with a co
 	list_foreach(ptr,&thread_head){
 		if(ptr == &my_tnode->list)
 			continue;
-		send(list_entry(ptr,thread_node,list)->sockfd,(char*)send_packet,sizeof(Biu_Packet),0);
+		stcp_server_send(list_entry(ptr,thread_node,list)->sockfd,(char*)send_packet,sizeof(Biu_Packet));
 	}
 
 	printf("thread %d is going to exit!\n",(int)my_tnode->tid);

@@ -84,7 +84,7 @@ int stcp_client_connect(int socked, unsigned int server_port, int nodeID);
 //
 
 int stcp_client_send(int sockfd, void* data, unsigned int length);
-
+int stcp_client_recv(int sockfd, void* buf, unsigned int length);
 // 发送数据给STCP服务器. 这个函数使用套接字ID找到TCB表中的条目.
 // 然后它使用提供的数据创建segBuf, 将它附加到发送缓冲区链表中.
 // 如果发送缓冲区在插入数据之前为空, 一个名为sendbuf_timer的线程就会启动.
@@ -97,6 +97,7 @@ int stcp_client_send(int sockfd, void* data, unsigned int length);
 //
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //
+
 
 int stcp_client_disconnect(int sockfd);
 
